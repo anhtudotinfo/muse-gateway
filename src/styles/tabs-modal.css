@@ -1,0 +1,474 @@
+/* ==========================================================================
+   Tabs, Profiles, Extension, Modals & Toasts
+   ========================================================================== */
+
+/* Apple Segmented Bar (macOS Tab Bar) */
+.apple-tab-bar {
+  display: flex;
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-lg);
+  padding: 3px;
+  gap: 4px;
+  margin-bottom: 18px;
+  overflow-x: auto;
+}
+
+.tab-pill-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 8px 12px;
+  border-radius: calc(var(--radius-lg) - 3px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  text-align: center;
+}
+
+.tab-pill-btn:hover {
+  color: #ffffff;
+}
+
+.tab-pill-btn.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Tab Surface Container */
+.tab-surface {
+  animation: tabFadeIn 0.2s ease-out;
+}
+
+@keyframes tabFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tab-top-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.caption-text {
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+
+/* Profiles Stack */
+.apple-profiles-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.apple-list-item {
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.apple-list-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.item-left-block h4 {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  background: rgba(0, 113, 227, 0.18);
+  border: 1px solid rgba(0, 113, 227, 0.3);
+  color: var(--apple-blue-vibrant);
+  border-radius: var(--radius-pill);
+}
+
+.item-timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.item-right-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-item-use {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--apple-border);
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-item-use:hover {
+  background: var(--apple-blue);
+  border-color: var(--apple-blue);
+}
+
+.btn-item-del {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  padding: 6px 8px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s ease;
+}
+
+.btn-item-del:hover {
+  color: var(--apple-red);
+  background: var(--apple-red-dim);
+}
+
+/* Guide Container (Bookmarklet & Extension) */
+.apple-guide-box {
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+
+.guide-pill-indicator {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--apple-purple);
+  background: var(--apple-purple-dim);
+  border: 1px solid rgba(191, 90, 242, 0.35);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  margin-bottom: 8px;
+}
+
+.guide-heading {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 8px;
+}
+
+.apple-step-list {
+  padding-left: 20px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 16px;
+}
+
+.apple-step-list strong {
+  color: var(--text-primary);
+}
+
+.apple-step-list code {
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+.bookmarklet-drop-zone {
+  text-align: center;
+  padding: 22px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.2);
+  margin-bottom: 18px;
+}
+
+.drop-prompt {
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.bookmarklet-pill-link {
+  display: inline-block;
+  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+  cursor: grab;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: all 0.2s ease;
+}
+
+.bookmarklet-pill-link:hover {
+  background: linear-gradient(180deg, #48484a 0%, #3a3a3c 100%);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Code Snippet Shell */
+.clean-code-shell {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.code-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.code-view-area {
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #d1d1d6;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+/* Extension Banner Card */
+.apple-banner-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.banner-icon {
+  font-size: 1.4rem;
+}
+
+.banner-copy h4 {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.banner-copy p {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+/* Token Table */
+.apple-table-shell {
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.apple-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.apple-table th {
+  text-align: left;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text-tertiary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--apple-border);
+}
+
+.apple-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
+}
+
+.table-token-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--apple-blue-vibrant);
+}
+
+.table-token-role {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.table-token-val {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Apple Modal (macOS Sheet Style) */
+.apple-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.apple-sheet-window {
+  background: var(--apple-surface-elevated);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--apple-border-light);
+  border-radius: var(--radius-xl);
+  max-width: 440px;
+  width: 100%;
+  padding: 24px 28px;
+  box-shadow: var(--apple-shadow-elevated);
+  animation: appleModalSpring 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes appleModalSpring {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.sheet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.sheet-header h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.apple-input-field {
+  width: 100%;
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  color: #ffffff;
+  outline: none;
+  margin-top: 6px;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+
+.apple-input-field:focus {
+  border-color: var(--apple-border-focus);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.25);
+}
+
+.sheet-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+/* Floating Dynamic Island Toast (Top Center) */
+.apple-toast-stage {
+  position: fixed;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.apple-island-toast {
+  pointer-events: auto;
+  background: rgba(28, 28, 30, 0.92);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--apple-border-light);
+  border-radius: var(--radius-pill);
+  padding: 8px 18px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65), 0 0 1px 1px rgba(255, 255, 255, 0.1);
+  animation: islandDrop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes islandDrop {
+  from { opacity: 0; transform: translateY(-12px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.toast-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.toast-badge-dot.success { background-color: var(--apple-green); box-shadow: 0 0 6px var(--apple-green); }
+.toast-badge-dot.error { background-color: var(--apple-red); box-shadow: 0 0 6px var(--apple-red); }
+.toast-badge-dot.info { background-color: var(--apple-blue-vibrant); box-shadow: 0 0 6px var(--apple-blue-vibrant); }
+
+/* Footer */
+.apple-footer {
+  text-align: center;
+  padding: 30px 0 10px;
+  font-size: 0.74rem;
+  color: var(--text-tertiary);
+}

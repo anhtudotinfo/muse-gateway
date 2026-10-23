@@ -1,0 +1,155 @@
+/* ==========================================================================
+   Apple API Desktop Gateway Styles
+   ========================================================================== */
+
+.api-params-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.api-param-row {
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.param-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.param-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--apple-blue-vibrant);
+  background: rgba(0, 113, 227, 0.15);
+  border: 1px solid rgba(0, 113, 227, 0.3);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.03em;
+  min-width: 72px;
+  text-align: center;
+}
+
+.param-value {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.btn-copy-chip {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--apple-border);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-copy-chip:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* Desktop App Client Cards */
+.client-app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.client-app-card {
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.client-app-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.app-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.app-card-desc {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* API Playground */
+.api-playground-box {
+  background: var(--apple-inner);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.playground-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.playground-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-md);
+  padding: 9px 13px;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  color: #ffffff;
+  outline: none;
+}
+
+.playground-input:focus {
+  border-color: var(--apple-border-focus);
+}
+
+.playground-terminal {
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #a7f3d0;
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
