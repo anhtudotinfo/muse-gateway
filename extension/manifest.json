@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Muse Session & Cookie Injector",
+  "version": "1.0.0",
+  "description": "Nhập và đồng bộ session cookie cho Muse Web chỉ với 1 click.",
+  "permissions": [
+    "cookies",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.muse.ai/*",
+    "*://*.meta.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Muse Cookie Injector"
+  }
+}

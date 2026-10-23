@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Muse Cookie Injector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <div class="logo">⚡</div>
+      <div class="header-text">
+        <h3>Muse Session Injector</h3>
+        <p>Đăng nhập Muse Web tức thì</p>
+      </div>
+    </div>
+
+    <div class="body">
+      <label for="cookieText" class="label">Dán chuỗi Cookie Muse:</label>
+      <textarea id="cookieText" placeholder="dpr=1.25; datr=...; hatch_sess=...; hatch_vml=...;"></textarea>
+      
+      <div class="status-summary" id="statusSummary">
+        <span id="detectedCount">0 cookies</span>
+      </div>
+
+      <div class="btn-group">
+        <button type="button" class="btn-primary" id="btnInjectAndOpen">🚀 Nạp Cookie & Mở Muse</button>
+        <button type="button" class="btn-secondary" id="btnPaste">Dán Clipboard</button>
+      </div>
+
+      <div class="msg" id="msgBox"></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
