@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { museDriver } from '@/lib/museDriver';
+import type { ChatCompletionRequest, ChatMessage } from '@/types';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,9 +12,9 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 200, headers: corsHeaders });
 }
 
-export async function POST(req) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body: ChatCompletionRequest = await req.json();
     const { model = 'muse-chat', messages = [], stream = false } = body;
 
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -29,7 +30,7 @@ export async function POST(req) {
       const c = messages[0].content;
       formattedPrompt = typeof c === 'string' ? c : JSON.stringify(c);
     } else {
-      const parts = messages.map((m) => {
+      const parts = messages.map((m: ChatMessage) => {
         const role = m.role === 'user' ? 'User' : m.role === 'system' ? 'System Instruction' : 'Assistant';
         const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
         return `${role}: ${text}`;
@@ -48,7 +49,7 @@ export async function POST(req) {
           try {
             await museDriver.chat({
               prompt: formattedPrompt,
-              onChunk: (chunk) => {
+              onChunk: (chunk: string) => {
                 const ssePayload = {
                   id: completionId,
                   object: 'chat.completion.chunk',
@@ -83,10 +84,10 @@ export async function POST(req) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(stopPayload)}\n\n`));
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             controller.close();
-          } catch (err) {
+          } catch (err: any) {
             console.error('[API Stream Error]:', err);
             const errPayload = {
-              error: { message: err.message, type: 'upstream_error' },
+              error: { message: err?.message || 'Upstream error', type: 'upstream_error' },
             };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(errPayload)}\n\n`));
             controller.close();
@@ -132,10 +133,10 @@ export async function POST(req) {
     };
 
     return NextResponse.json(responsePayload, { headers: corsHeaders });
-  } catch (err) {
+  } catch (err: any) {
     console.error('[API Completion Error]:', err);
     return NextResponse.json(
-      { error: { message: err.message, type: 'server_error' } },
+      { error: { message: err?.message || 'Internal server error', type: 'server_error' } },
       { status: 500, headers: corsHeaders }
     );
   }

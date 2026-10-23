@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { launchBrowserWithCookies } from '@/lib/museService';
 
-export async function POST(req) {
+export async function POST(req: NextRequest) {
   try {
     const { cookies, browserType } = await req.json();
     if (!cookies) {
@@ -16,10 +16,10 @@ export async function POST(req) {
       browser: info.browser,
       totalCookiesInjected: info.totalCookiesInjected,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Launch browser error:', err);
     return NextResponse.json({
-      error: 'Lỗi khi khởi chạy trình duyệt: ' + err.message,
+      error: 'Lỗi khi khởi chạy trình duyệt: ' + err?.message,
     }, { status: 500 });
   }
 }

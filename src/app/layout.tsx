@@ -1,11 +1,17 @@
+import type { Metadata } from 'next';
+import React from 'react';
 import './globals.css';
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'Muse Session — Studio Pro',
   description: 'Trình quản lý session và tự động đăng nhập Muse Web chuẩn phong cách Apple.',
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="vi">
       <head>

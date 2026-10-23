@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { generateBookmarklet } from '@/lib/museService';
 
-export async function POST(req) {
+export async function POST(req: NextRequest) {
   try {
     const { cookies } = await req.json();
     if (!cookies) {
@@ -10,7 +10,7 @@ export async function POST(req) {
 
     const result = generateBookmarklet(cookies);
     return NextResponse.json(result);
-  } catch (err) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message }, { status: 500 });
   }
 }

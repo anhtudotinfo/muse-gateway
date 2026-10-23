@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSavedSessions, saveSessionProfile } from '@/lib/museService';
 
 export async function GET() {
@@ -6,7 +6,7 @@ export async function GET() {
   return NextResponse.json(sessions);
 }
 
-export async function POST(req) {
+export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     if (!body.cookies) {
@@ -15,7 +15,7 @@ export async function POST(req) {
 
     const session = saveSessionProfile(body);
     return NextResponse.json({ success: true, session });
-  } catch (err) {
-    return NextResponse.json({ error: 'Lỗi khi lưu: ' + err.message }, { status: 500 });
+  } catch (err: any) {
+    return NextResponse.json({ error: 'Lỗi khi lưu: ' + err?.message }, { status: 500 });
   }
 }

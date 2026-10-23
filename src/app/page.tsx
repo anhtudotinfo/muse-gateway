@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import type { Profile, SessionTestResult, BrowserDetection } from '@/types';
 
-const ROLES_MAP = {
+const ROLES_MAP: Record<string, string> = {
   'hatch_sess': 'Phiên đăng nhập chính (Session Token)',
   'hatch_vml': 'Quyền truy cập Virtual Machine (VM Lease)',
   'hatch_gw': 'Cổng định tuyến WebSocket tới hạ tầng VM',
@@ -17,25 +18,31 @@ const ROLES_MAP = {
   'ps_n': 'Partitioned State Nonce của Meta',
 };
 
+interface ToastItem {
+  id: number;
+  message: string;
+  type: 'info' | 'success' | 'error';
+}
+
 export default function MuseAppleApp() {
-  const [cookieInput, setCookieInput] = useState('');
-  const [selectedBrowser, setSelectedBrowser] = useState('chrome');
-  const [availableBrowsers, setAvailableBrowsers] = useState({ chrome: null, edge: null });
-  const [isLaunching, setIsLaunching] = useState(false);
-  const [launchStatus, setLaunchStatus] = useState('Tự động nạp Cookie vào Chrome/Edge');
+  const [cookieInput, setCookieInput] = useState<string>('');
+  const [selectedBrowser, setSelectedBrowser] = useState<'chrome' | 'edge'>('chrome');
+  const [availableBrowsers, setAvailableBrowsers] = useState<BrowserDetection>({ chrome: null, edge: null });
+  const [isLaunching, setIsLaunching] = useState<boolean>(false);
+  const [launchStatus, setLaunchStatus] = useState<string>('Tự động nạp Cookie vào Chrome/Edge');
 
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
+  const [isTesting, setIsTesting] = useState<boolean>(false);
+  const [testResult, setTestResult] = useState<SessionTestResult | null>(null);
 
-  const [activeTab, setActiveTab] = useState('profiles');
-  const [profiles, setProfiles] = useState([]);
-  const [saveModalOpen, setSaveModalOpen] = useState(false);
-  const [modalProfileName, setModalProfileName] = useState('');
+  const [activeTab, setActiveTab] = useState<'profiles' | 'api' | 'bookmarklet' | 'extension' | 'inspector'>('profiles');
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [saveModalOpen, setSaveModalOpen] = useState<boolean>(false);
+  const [modalProfileName, setModalProfileName] = useState<string>('');
 
-  const [toasts, setToasts] = useState([]);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   // Toast notification (Apple Dynamic Island Style)
-  const showToast = useCallback((message, type = 'info') => {
+  const showToast = useCallback((message: string, type: 'info' | 'success' | 'error' = 'info') => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
@@ -44,10 +51,10 @@ export default function MuseAppleApp() {
   }, []);
 
   // Parse cookies from input
-  const parsedMap = useMemo(() => {
+  const parsedMap = useMemo<Record<string, string>>(() => {
     if (!cookieInput || typeof cookieInput !== 'string') return {};
     const cleaned = cookieInput.replace(/^Cookie:\s*/i, '').trim();
-    const map = {};
+    const map: Record<string, string> = {};
     const pairs = cleaned.split(';').map((s) => s.trim()).filter(Boolean);
     for (const p of pairs) {
       const idx = p.indexOf('=');
@@ -127,7 +134,7 @@ export default function MuseAppleApp() {
       } else {
         showToast('Clipboard trống', 'error');
       }
-    } catch (err) {
+    } catch {
       showToast('Vui lòng cấp quyền clipboard hoặc bấm Ctrl+V', 'error');
     }
   };
@@ -174,7 +181,7 @@ export default function MuseAppleApp() {
         showToast(data.error || 'Lỗi khởi chạy trình duyệt', 'error');
         setLaunchStatus('Tự động nạp Cookie vào Chrome/Edge');
       }
-    } catch (err) {
+    } catch (err: any) {
       showToast('Lỗi kết nối tới máy chủ khởi chạy: ' + err.message, 'error');
       setLaunchStatus('Tự động nạp Cookie vào Chrome/Edge');
     } finally {
@@ -202,7 +209,7 @@ export default function MuseAppleApp() {
         body: JSON.stringify({ cookies: raw }),
       });
 
-      const result = await res.json();
+      const result: SessionTestResult = await res.json();
       setTestResult(result);
 
       if (result.valid) {
@@ -210,7 +217,7 @@ export default function MuseAppleApp() {
       } else {
         showToast(result.message || 'Session không hợp lệ hoặc đã hết hạn', 'error');
       }
-    } catch (e) {
+    } catch (e: any) {
       showToast('Lỗi kiểm tra session: ' + e.message, 'error');
     } finally {
       setIsTesting(false);
@@ -249,12 +256,12 @@ export default function MuseAppleApp() {
       } else {
         showToast('Lỗi khi lưu hồ sơ', 'error');
       }
-    } catch (e) {
+    } catch (e: any) {
       showToast('Lỗi mạng khi lưu: ' + e.message, 'error');
     }
   };
 
-  const handleDeleteProfile = async (id, name) => {
+  const handleDeleteProfile = async (id: string, name: string) => {
     if (confirm(`Bạn có chắc muốn xóa hồ sơ "${name}" không?`)) {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       showToast('Đã xóa hồ sơ', 'info');
@@ -262,7 +269,7 @@ export default function MuseAppleApp() {
     }
   };
 
-  const handleUseProfile = (profile) => {
+  const handleUseProfile = (profile: Profile) => {
     setCookieInput(profile.cookies);
     showToast(`Đã nạp hồ sơ: "${profile.name}"`, 'success');
   };
@@ -280,18 +287,18 @@ export default function MuseAppleApp() {
     });
   };
 
-  const handleCopyText = (text, label) => {
+  const handleCopyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text).then(() => {
       showToast(`Đã sao chép ${label}`, 'success');
     });
   };
 
   // API Desktop Gateway Playground State & Handler
-  const [apiPrompt, setApiPrompt] = useState('Xin chào! Hãy giới thiệu bạn là ai và hỗ trợ được những gì?');
-  const [apiResponse, setApiResponse] = useState('');
-  const [isTestingApi, setIsTestingApi] = useState(false);
-  const [apiModel, setApiModel] = useState('muse-chat');
-  const [apiStream, setApiStream] = useState(true);
+  const [apiPrompt, setApiPrompt] = useState<string>('Xin chào! Hãy giới thiệu bạn là ai và hỗ trợ được những gì?');
+  const [apiResponse, setApiResponse] = useState<string>('');
+  const [isTestingApi, setIsTestingApi] = useState<boolean>(false);
+  const [apiModel, setApiModel] = useState<string>('muse-chat');
+  const [apiStream, setApiStream] = useState<boolean>(true);
 
   const handleRunApiTest = async () => {
     if (!apiPrompt.trim()) {
@@ -347,7 +354,7 @@ export default function MuseAppleApp() {
                 const delta = parsed.choices?.[0]?.delta?.content || '';
                 fullText += delta;
                 setApiResponse(fullText);
-              } catch (e) {
+              } catch {
                 // ignore chunk parse error
               }
             }
@@ -360,7 +367,7 @@ export default function MuseAppleApp() {
         setApiResponse(reply);
         showToast('Nhận phản hồi từ API thành công', 'success');
       }
-    } catch (err) {
+    } catch (err: any) {
       showToast('Lỗi gọi API: ' + err.message, 'error');
       setApiResponse(`[Lỗi API]: ${err.message}`);
     } finally {
@@ -404,7 +411,7 @@ export default function MuseAppleApp() {
           <div className="nav-status-controls">
             <div className="system-status-indicator">
               <span className="pulse-dot"></span>
-              <span>Next.js Ready</span>
+              <span>Next.js TS Ready</span>
             </div>
 
             <div className="browser-chips-group">
@@ -426,34 +433,33 @@ export default function MuseAppleApp() {
       </header>
 
       {/* Main Workspace Container */}
-      <main className="apple-workspace-container">
-        <div className="apple-grid">
-          {/* Left Column: Cookie Workspace */}
+      <main className="apple-main-stage">
+        <div className="apple-grid-two-columns">
+          {/* Left Column: Input Deck */}
           <section className="apple-card">
-            <div className="card-top-bar">
-              <div className="title-lockup">
-                <h2>Phiên Đăng Nhập Muse</h2>
-                <p>Dán chuỗi cookie để khởi chạy hoặc kiểm tra kết nối máy ảo.</p>
+            <div className="card-top-row">
+              <div className="card-title-group">
+                <h2 className="card-headline">Phiên Đăng Nhập Muse</h2>
+                <p className="card-subhead">Dán chuỗi cookie để khởi chạy hoặc kiểm tra kết nối máy ảo</p>
               </div>
-
-              <div className="apple-toolbar-actions">
+              <div className="card-actions-group">
                 <button type="button" className="apple-tool-btn" onClick={handlePasteClipboard} title="Dán từ Clipboard">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
                     <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
                   </svg>
                   Dán
                 </button>
-                <button type="button" className="apple-tool-btn" onClick={handleLoadSample} title="Tải cookie mẫu">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <button type="button" className="apple-tool-btn" onClick={handleLoadSample} title="Nạp Cookie Mẫu">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                   Mẫu
                 </button>
-                <button type="button" className="apple-tool-btn danger" onClick={handleClear} title="Xóa toàn bộ">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <button type="button" className="apple-tool-btn danger" onClick={handleClear} title="Xóa dữ liệu">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="3 6 5 6 21 6" />
                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                   </svg>
@@ -462,8 +468,8 @@ export default function MuseAppleApp() {
               </div>
             </div>
 
-            {/* Inset Text Editor */}
-            <div className="cookie-field-shell">
+            {/* Frosted Textarea */}
+            <div className="apple-input-container">
               <textarea
                 className="apple-textarea"
                 value={cookieInput}
@@ -1000,7 +1006,7 @@ export default function MuseAppleApp() {
                       <tbody>
                         {parsedEntries.length === 0 ? (
                           <tr>
-                            <td colSpan="3" style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '24px' }}>
+                            <td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: '24px' }}>
                               Chưa có cookie nào được nhập.
                             </td>
                           </tr>
@@ -1034,7 +1040,7 @@ export default function MuseAppleApp() {
 
         {/* Apple Clean Footer */}
         <footer className="apple-footer">
-          <p>Designed with Apple Human Interface Guidelines &bull; Next.js 16 App Router &bull; Google Chrome & Microsoft Edge</p>
+          <p>Designed with Apple Human Interface Guidelines &bull; Next.js 16 App Router (TypeScript) &bull; Google Chrome & Microsoft Edge</p>
         </footer>
       </main>
 

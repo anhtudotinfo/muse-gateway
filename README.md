@@ -6,9 +6,10 @@ Công cụ web hiện đại xây dựng trên **Next.js phiên bản mới nh�
 
 ## ✨ Tính Năng Nổi Bật
 
-1. **Next.js 16 App Router & Turbopack**:
-   - Được tái cấu trúc hoàn toàn trên nền tảng **Next.js 16** với kiến trúc App Router, React 19 Client & Server Components, và Turbopack cho tốc độ phản hồi cực nhanh.
-   - Giao diện Dark Glassmorphism cao cấp, hiệu ứng ánh sáng động (ambient glow), mượt mà trên mọi thiết bị.
+1. **Next.js 16 App Router & 100% TypeScript (TSX)**:
+   - Được xây dựng hoàn toàn bằng **TypeScript và React 19 TSX** với type-safety chặt chẽ.
+   - Kiến trúc App Router, React 19 Client & Server Components, và Turbopack cho tốc độ phản hồi cực nhanh.
+   - Giao diện Apple Dark Glassmorphism cao cấp, hiệu ứng ánh sáng động (ambient glow), mượt mà trên mọi thiết bị.
 
 2. **Khởi Chạy Trình Duyệt 1-Click (Auto-Inject)**:
    - Tự động phát hiện Google Chrome hoặc Microsoft Edge trên máy tính.

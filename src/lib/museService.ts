@@ -3,13 +3,14 @@ import path from 'path';
 import os from 'os';
 import https from 'https';
 import puppeteer from 'puppeteer-core';
+import type { CookieMap, Profile, SessionTestResult, BrowserDetection } from '@/types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const USER_DATA_DIR = path.join(os.tmpdir(), 'muse-browser-profile');
 
 // Ensure data directory exists
-function ensureDataDir() {
+function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
@@ -18,7 +19,7 @@ function ensureDataDir() {
   }
 }
 
-function safeFileExists(filePath) {
+function safeFileExists(filePath: string): boolean {
   try {
     fs.accessSync(filePath, fs.constants.F_OK);
     return true;
@@ -27,8 +28,13 @@ function safeFileExists(filePath) {
   }
 }
 
+export interface BrowserExecutableInfo {
+  type: 'chrome' | 'edge';
+  path: string;
+}
+
 // Find Chrome/Edge executables on Windows
-export function getBrowserExecutable(preferred = 'chrome') {
+export function getBrowserExecutable(preferred: string = 'chrome'): BrowserExecutableInfo | null {
   const localAppData = process.env.LOCALAPPDATA || '';
   const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
@@ -63,11 +69,11 @@ export function getBrowserExecutable(preferred = 'chrome') {
 }
 
 // Parse cookie string into map
-export function parseCookieString(rawCookie) {
+export function parseCookieString(rawCookie: string): CookieMap {
   if (!rawCookie || typeof rawCookie !== 'string') return {};
   const cleaned = rawCookie.replace(/^Cookie:\s*/i, '').trim();
   const pairs = cleaned.split(';').map(p => p.trim()).filter(Boolean);
-  const cookieMap = {};
+  const cookieMap: CookieMap = {};
 
   for (const pair of pairs) {
     const idx = pair.indexOf('=');
@@ -83,8 +89,8 @@ export function parseCookieString(rawCookie) {
 }
 
 // Format cookie map into Puppeteer-compatible cookie objects
-export function formatCookiesForPuppeteer(cookieMap) {
-  const cookies = [];
+export function formatCookiesForPuppeteer(cookieMap: CookieMap): any[] {
+  const cookies: any[] = [];
   const domain = '.muse.ai';
 
   for (const [name, value] of Object.entries(cookieMap)) {
@@ -123,7 +129,7 @@ export function formatCookiesForPuppeteer(cookieMap) {
 }
 
 // Test session online
-export function testSessionOnline(cookieHeader) {
+export function testSessionOnline(cookieHeader: string): Promise<SessionTestResult> {
   return new Promise((resolve) => {
     const req = https.request({
       hostname: 'muse.ai',
@@ -145,7 +151,7 @@ export function testSessionOnline(cookieHeader) {
             const data = JSON.parse(body);
             resolve({
               valid: true,
-              statusCode: res.statusCode,
+              status: res.statusCode,
               data: {
                 status: data.status,
                 vm_id: data.vm_id,
@@ -154,22 +160,19 @@ export function testSessionOnline(cookieHeader) {
                 vm_name: data.vm_name,
                 vms: data.vms || [],
               },
-              raw: data,
             });
           } else {
             resolve({
               valid: false,
-              statusCode: res.statusCode,
+              status: res.statusCode,
               message: `HTTP ${res.statusCode}: Session không hợp lệ hoặc đã hết hạn.`,
-              raw: body.slice(0, 500),
             });
           }
-        } catch (e) {
+        } catch {
           resolve({
             valid: res.statusCode === 200,
-            statusCode: res.statusCode,
+            status: res.statusCode,
             message: 'Phản hồi không phải JSON hợp lệ',
-            raw: body.slice(0, 500),
           });
         }
       });
@@ -178,7 +181,7 @@ export function testSessionOnline(cookieHeader) {
     req.on('error', (err) => {
       resolve({
         valid: false,
-        statusCode: 0,
+        status: 0,
         message: 'Lỗi kết nối tới muse.ai: ' + err.message,
       });
     });
@@ -187,7 +190,7 @@ export function testSessionOnline(cookieHeader) {
       req.destroy();
       resolve({
         valid: false,
-        statusCode: 408,
+        status: 408,
         message: 'Hết thời gian chờ phản hồi từ muse.ai (Timeout 10s)',
       });
     });
@@ -197,7 +200,7 @@ export function testSessionOnline(cookieHeader) {
 }
 
 // Launch browser with injected cookies
-export async function launchBrowserWithCookies(cookies, browserType = 'chrome') {
+export async function launchBrowserWithCookies(cookies: string, browserType: string = 'chrome') {
   const browserInfo = getBrowserExecutable(browserType);
   if (!browserInfo) {
     throw new Error('Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy tính của bạn.');
@@ -240,17 +243,17 @@ export async function launchBrowserWithCookies(cookies, browserType = 'chrome') 
 }
 
 // Session store operations
-export function getSavedSessions() {
+export function getSavedSessions(): Profile[] {
   ensureDataDir();
   try {
     const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
     return JSON.parse(raw);
-  } catch (e) {
+  } catch {
     return [];
   }
 }
 
-export function saveSessionProfile({ id, name, cookies }) {
+export function saveSessionProfile({ id, name, cookies }: { id?: string; name: string; cookies: string }): Profile {
   ensureDataDir();
   const sessions = getSavedSessions();
   const sessionId = id || 'session_' + Date.now();
@@ -258,7 +261,7 @@ export function saveSessionProfile({ id, name, cookies }) {
   const existingIdx = sessions.findIndex(s => s.id === sessionId);
   const now = new Date().toISOString();
 
-  const sessionObj = {
+  const sessionObj: Profile = {
     id: sessionId,
     name: sessionName,
     cookies,
@@ -276,7 +279,7 @@ export function saveSessionProfile({ id, name, cookies }) {
   return sessionObj;
 }
 
-export function deleteSessionProfile(id) {
+export function deleteSessionProfile(id: string): boolean {
   ensureDataDir();
   let sessions = getSavedSessions();
   sessions = sessions.filter(s => s.id !== id);
@@ -284,7 +287,7 @@ export function deleteSessionProfile(id) {
   return true;
 }
 
-export function generateBookmarklet(cookies) {
+export function generateBookmarklet(cookies: string): { bookmarkletUrl: string; consoleScript: string } {
   const map = parseCookieString(cookies);
   const entries = Object.entries(map);
 

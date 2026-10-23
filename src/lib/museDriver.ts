@@ -1,18 +1,20 @@
-import fs from 'fs';
-import path from 'path';
-import puppeteer from 'puppeteer-core';
+import puppeteer, { Browser, Page } from 'puppeteer-core';
 import { getBrowserExecutable, getSavedSessions, parseCookieString, formatCookiesForPuppeteer } from './museService';
+import type { OpenAIModel } from '@/types';
+
+export interface ChatOptions {
+  prompt: string;
+  onChunk?: ((chunk: string) => void) | null;
+}
 
 class MuseDriverService {
-  constructor() {
-    this.browser = null;
-    this.page = null;
-    this.isBusy = false;
-    this.lastActiveTime = Date.now();
-    this.idleTimer = null;
-  }
+  private browser: Browser | null = null;
+  private page: Page | null = null;
+  private isBusy: boolean = false;
+  private lastActiveTime: number = Date.now();
+  private idleTimer: NodeJS.Timeout | null = null;
 
-  async getActiveCookies() {
+  async getActiveCookies(): Promise<string> {
     const sessions = getSavedSessions();
     if (sessions && sessions.length > 0) {
       return sessions[0].cookies;
@@ -20,7 +22,7 @@ class MuseDriverService {
     return '';
   }
 
-  resetIdleTimer() {
+  resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     // Auto-close headless browser after 15 minutes of inactivity to save RAM
     this.idleTimer = setTimeout(() => {
@@ -28,7 +30,7 @@ class MuseDriverService {
     }, 15 * 60 * 1000);
   }
 
-  async getPage() {
+  async getPage(): Promise<Page> {
     this.resetIdleTimer();
     if (this.browser && this.page && !this.page.isClosed()) {
       return this.page;
@@ -72,7 +74,7 @@ class MuseDriverService {
     return this.page;
   }
 
-  async chat({ prompt, onChunk = null }) {
+  async chat({ prompt, onChunk = null }: ChatOptions): Promise<string> {
     // Queue if busy
     while (this.isBusy) {
       await new Promise((r) => setTimeout(r, 200));
@@ -84,6 +86,7 @@ class MuseDriverService {
     try {
       const page = await this.getPage();
       const textarea = await page.waitForSelector('textarea', { timeout: 20000 });
+      if (!textarea) throw new Error('Không tìm thấy khung chat trên Muse.');
 
       // Focus and clear textarea
       await textarea.click();
@@ -142,7 +145,7 @@ class MuseDriverService {
       console.error('[MuseDriver] Chat error:', err);
       // If error occurs, reset page so next request can recover
       if (this.page) {
-        try { await this.page.close(); } catch (e) {}
+        try { await this.page.close(); } catch {}
         this.page = null;
       }
       throw err;
@@ -152,11 +155,11 @@ class MuseDriverService {
     }
   }
 
-  async close() {
+  async close(): Promise<void> {
     if (this.browser) {
       try {
         await this.browser.close();
-      } catch (e) {}
+      } catch {}
       this.browser = null;
       this.page = null;
     }
@@ -164,13 +167,13 @@ class MuseDriverService {
 }
 
 // Global singleton for Next.js hot-reloading preservation
-const globalForMuse = globalThis;
+const globalForMuse = globalThis as unknown as { museDriver: MuseDriverService };
 export const museDriver = globalForMuse.museDriver || new MuseDriverService();
 if (process.env.NODE_ENV !== 'production') {
   globalForMuse.museDriver = museDriver;
 }
 
-export const SUPPORTED_MODELS = [
+export const SUPPORTED_MODELS: OpenAIModel[] = [
   { id: 'muse-chat', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o-mini', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
