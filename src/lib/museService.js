@@ -1,0 +1,299 @@
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
+import puppeteer from 'puppeteer-core';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const USER_DATA_DIR = path.join(process.cwd(), '.browser-profile');
+
+// Ensure data directory exists
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(SESSIONS_FILE)) {
+    fs.writeFileSync(SESSIONS_FILE, '[]', 'utf8');
+  }
+}
+
+// Find Chrome/Edge executables on Windows
+export function getBrowserExecutable(preferred = 'chrome') {
+  const localAppData = process.env.LOCALAPPDATA || '';
+  const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+
+  const chromePaths = [
+    path.join(programFiles, 'Google\\Chrome\\Application\\chrome.exe'),
+    path.join(programFilesX86, 'Google\\Chrome\\Application\\chrome.exe'),
+    path.join(localAppData, 'Google\\Chrome\\Application\\chrome.exe'),
+  ];
+
+  const edgePaths = [
+    path.join(programFilesX86, 'Microsoft\\Edge\\Application\\msedge.exe'),
+    path.join(programFiles, 'Microsoft\\Edge\\Application\\msedge.exe'),
+    path.join(localAppData, 'Microsoft\\Edge\\Application\\msedge.exe'),
+  ];
+
+  if (preferred === 'edge') {
+    for (const p of edgePaths) {
+      if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'edge', path: p };
+    }
+  }
+
+  for (const p of chromePaths) {
+    if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'chrome', path: p };
+  }
+
+  for (const p of edgePaths) {
+    if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'edge', path: p };
+  }
+
+  return null;
+}
+
+// Parse cookie string into map
+export function parseCookieString(rawCookie) {
+  if (!rawCookie || typeof rawCookie !== 'string') return {};
+  const cleaned = rawCookie.replace(/^Cookie:\s*/i, '').trim();
+  const pairs = cleaned.split(';').map(p => p.trim()).filter(Boolean);
+  const cookieMap = {};
+
+  for (const pair of pairs) {
+    const idx = pair.indexOf('=');
+    if (idx !== -1) {
+      const key = pair.slice(0, idx).trim();
+      const val = pair.slice(idx + 1).trim();
+      if (key) {
+        cookieMap[key] = val;
+      }
+    }
+  }
+  return cookieMap;
+}
+
+// Format cookie map into Puppeteer-compatible cookie objects
+export function formatCookiesForPuppeteer(cookieMap) {
+  const cookies = [];
+  const domain = '.muse.ai';
+
+  for (const [name, value] of Object.entries(cookieMap)) {
+    if (!name || value === undefined) continue;
+
+    if (name.startsWith('__Host-')) {
+      cookies.push({
+        name,
+        value,
+        url: 'https://muse.ai',
+        path: '/',
+        secure: true,
+      });
+    } else {
+      cookies.push({
+        name,
+        value,
+        domain,
+        path: '/',
+        secure: true,
+        sameSite: 'Lax',
+      });
+
+      if (name === 'datr') {
+        cookies.push({
+          name,
+          value,
+          domain: '.meta.com',
+          path: '/',
+          secure: true,
+        });
+      }
+    }
+  }
+  return cookies;
+}
+
+// Test session online
+export function testSessionOnline(cookieHeader) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'muse.ai',
+      path: '/api/session',
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Cookie': cookieHeader,
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://muse.ai/',
+      },
+      timeout: 10000,
+    }, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode === 200) {
+            const data = JSON.parse(body);
+            resolve({
+              valid: true,
+              statusCode: res.statusCode,
+              data: {
+                status: data.status,
+                vm_id: data.vm_id,
+                vm_state: data.vm_state,
+                endpoint_url: data.endpoint_url,
+                vm_name: data.vm_name,
+                vms: data.vms || [],
+              },
+              raw: data,
+            });
+          } else {
+            resolve({
+              valid: false,
+              statusCode: res.statusCode,
+              message: `HTTP ${res.statusCode}: Session không hợp lệ hoặc đã hết hạn.`,
+              raw: body.slice(0, 500),
+            });
+          }
+        } catch (e) {
+          resolve({
+            valid: res.statusCode === 200,
+            statusCode: res.statusCode,
+            message: 'Phản hồi không phải JSON hợp lệ',
+            raw: body.slice(0, 500),
+          });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({
+        valid: false,
+        statusCode: 0,
+        message: 'Lỗi kết nối tới muse.ai: ' + err.message,
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({
+        valid: false,
+        statusCode: 408,
+        message: 'Hết thời gian chờ phản hồi từ muse.ai (Timeout 10s)',
+      });
+    });
+
+    req.end();
+  });
+}
+
+// Launch browser with injected cookies
+export async function launchBrowserWithCookies(cookies, browserType = 'chrome') {
+  const browserInfo = getBrowserExecutable(browserType);
+  if (!browserInfo) {
+    throw new Error('Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy tính của bạn.');
+  }
+
+  const cookieMap = parseCookieString(cookies);
+  const puppeteerCookies = formatCookiesForPuppeteer(cookieMap);
+
+  const browser = await puppeteer.launch({
+    executablePath: browserInfo.path,
+    headless: false,
+    defaultViewport: null,
+    userDataDir: USER_DATA_DIR,
+    args: [
+      '--start-maximized',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-infobars',
+      '--window-name=Muse_Web_Session',
+    ],
+    ignoreDefaultArgs: ['--enable-automation'],
+  });
+
+  const pages = await browser.pages();
+  const page = pages.length > 0 ? pages[0] : await browser.newPage();
+
+  await page.setCookie(...puppeteerCookies);
+
+  await page.goto('https://muse.ai/', {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000,
+  });
+
+  browser.disconnect();
+
+  return {
+    browser: browserInfo.type,
+    totalCookiesInjected: puppeteerCookies.length,
+  };
+}
+
+// Session store operations
+export function getSavedSessions() {
+  ensureDataDir();
+  try {
+    const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    return [];
+  }
+}
+
+export function saveSessionProfile({ id, name, cookies }) {
+  ensureDataDir();
+  const sessions = getSavedSessions();
+  const sessionId = id || 'session_' + Date.now();
+  const sessionName = name || 'Session ' + (sessions.length + 1);
+  const existingIdx = sessions.findIndex(s => s.id === sessionId);
+  const now = new Date().toISOString();
+
+  const sessionObj = {
+    id: sessionId,
+    name: sessionName,
+    cookies,
+    updatedAt: now,
+    createdAt: existingIdx >= 0 ? sessions[existingIdx].createdAt : now,
+  };
+
+  if (existingIdx >= 0) {
+    sessions[existingIdx] = sessionObj;
+  } else {
+    sessions.unshift(sessionObj);
+  }
+
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+  return sessionObj;
+}
+
+export function deleteSessionProfile(id) {
+  ensureDataDir();
+  let sessions = getSavedSessions();
+  sessions = sessions.filter(s => s.id !== id);
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+  return true;
+}
+
+export function generateBookmarklet(cookies) {
+  const map = parseCookieString(cookies);
+  const entries = Object.entries(map);
+
+  const jsLines = entries.map(([k, v]) => {
+    return `document.cookie = "${encodeURIComponent(k)}=${encodeURIComponent(v)}; domain=.muse.ai; path=/; max-age=31536000; SameSite=Lax; Secure";`;
+  });
+
+  const fullScript = `(function(){
+  if (!location.hostname.includes('muse.ai')) {
+    alert('Vui lòng mở trang https://muse.ai trước khi nhấn Bookmarklet này!');
+    location.href = 'https://muse.ai';
+    return;
+  }
+  ${jsLines.join('\n  ')}
+  alert('Đã inject ${entries.length} cookies thành công! Trang sẽ được làm mới ngay.');
+  location.reload();
+})();`;
+
+  const bookmarkletUrl = 'javascript:' + encodeURIComponent(fullScript.replace(/\n\s*/g, ' '));
+
+  return { bookmarkletUrl, consoleScript: fullScript };
+}

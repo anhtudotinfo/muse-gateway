@@ -1,3 +1,5 @@
 node_modules/
+.next/
+.browser-profile/
 .DS_Store
 *.log
