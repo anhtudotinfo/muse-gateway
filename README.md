@@ -27,6 +27,70 @@ Công cụ web hiện đại xây dựng trên **Next.js phiên bản mới nh�
 6. **Kèm Extension Chrome/Edge Đóng Gói Sẵn**:
    - Thư mục `./extension` chuẩn Manifest V3 sẵn sàng cài đặt.
 
+7. **Cổng Kết Nối API Desktop (OpenAI-Compatible Gateway)**:
+   - Cung cấp trọn bộ endpoint chuẩn OpenAI: `/v1/chat/completions`, `/v1/models`.
+   - Hỗ trợ cả phản hồi tuần tự JSON và phản hồi phát trực tiếp SSE Streaming (`stream: true`).
+   - Tương thích 100% với các ứng dụng desktop AI hàng đầu: **Cherry Studio**, **Chatbox**, **NextChat**, **LobeChat**, **Cursor IDE**, **Continue**, cũng như các thư viện **OpenAI Python / Node SDK**.
+
+---
+
+## 🔌 Hướng Dẫn Kết Nối API Vào Các Phần Mềm Desktop
+
+Hệ thống Next.js tích hợp sẵn máy chủ Gateway chuẩn OpenAI. Bạn chỉ cần cấu hình vào phần mềm desktop như sau:
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| **API Base URL** | `http://localhost:3000/v1` *(hoặc `http://localhost:3000/api/v1`)* |
+| **API Key** | `sk-muse-session` *(hoặc bất kỳ ký tự nào)* |
+| **Model ID** | `muse-chat` *(hoặc alias `gpt-4o`, `claude-3-5-sonnet`, `deepseek-chat`)* |
+
+### 1. Kết nối với Cherry Studio
+1. Vào **Cài đặt** (Settings) &rarr; **Nhà cung cấp mô hình** (Model Providers).
+2. Chọn nhà cung cấp **OpenAI** (hoặc tạo Custom Provider).
+3. Điền **API Base URL**: `http://localhost:3000/v1`
+4. Điền **API Key**: `sk-muse-session`
+5. Thêm mã mô hình: `muse-chat`
+6. Bấm kiểm tra kết nối & bắt đầu trò chuyện.
+
+### 2. Kết nối với Chatbox AI
+1. Mở Chatbox &rarr; **Cài đặt** (Settings).
+2. Tại mục **AI Model Provider**, chọn **OpenAI API**.
+3. **API Host**: Nhập `http://localhost:3000` *(Chatbox sẽ tự động thêm `/v1/chat/completions`)*.
+4. **API Key**: `sk-muse-session`.
+5. **Model**: Chọn tùy chỉnh và nhập `muse-chat`.
+
+### 3. Gọi trực tiếp bằng cURL
+```bash
+curl -X POST http://localhost:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-muse-session" \
+  -d '{
+    "model": "muse-chat",
+    "messages": [{"role": "user", "content": "Xin chào Muse!"}],
+    "stream": false
+  }'
+```
+
+### 4. Gọi bằng Python (OpenAI SDK)
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:3000/v1",
+    api_key="sk-muse-session"
+)
+
+response = client.chat.completions.create(
+    model="muse-chat",
+    messages=[{"role": "user", "content": "Xin chào Muse AI!"}],
+    stream=True
+)
+
+for chunk in response:
+    content = chunk.choices[0].delta.content or ""
+    print(content, end="", flush=True)
+```
+
 ---
 
 ## 🛠️ Hướng Dẫn Cài Đặt & Khởi Động

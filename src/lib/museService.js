@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import https from 'https';
 import puppeteer from 'puppeteer-core';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
-const USER_DATA_DIR = path.join(process.cwd(), '.browser-profile');
+const USER_DATA_DIR = path.join(os.tmpdir(), 'muse-browser-profile');
 
 // Ensure data directory exists
 function ensureDataDir() {
@@ -14,6 +15,15 @@ function ensureDataDir() {
   }
   if (!fs.existsSync(SESSIONS_FILE)) {
     fs.writeFileSync(SESSIONS_FILE, '[]', 'utf8');
+  }
+}
+
+function safeFileExists(filePath) {
+  try {
+    fs.accessSync(filePath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -37,16 +47,16 @@ export function getBrowserExecutable(preferred = 'chrome') {
 
   if (preferred === 'edge') {
     for (const p of edgePaths) {
-      if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'edge', path: p };
+      if (safeFileExists(p)) return { type: 'edge', path: p };
     }
   }
 
   for (const p of chromePaths) {
-    if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'chrome', path: p };
+    if (safeFileExists(p)) return { type: 'chrome', path: p };
   }
 
   for (const p of edgePaths) {
-    if (fs.existsSync(/*turbopackIgnore: true*/ p)) return { type: 'edge', path: p };
+    if (safeFileExists(p)) return { type: 'edge', path: p };
   }
 
   return null;
