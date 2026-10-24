@@ -2,12 +2,12 @@
    Tabs, Profiles, Extension, Modals & Toasts
    ========================================================================== */
 
-/* Apple Segmented Bar (macOS Tab Bar) */
+/* Tab Bar */
 .apple-tab-bar {
   display: flex;
   background: var(--apple-inner);
   border: 1px solid var(--apple-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: 3px;
   gap: 4px;
   margin-bottom: 18px;
@@ -23,22 +23,21 @@
   font-size: 0.78rem;
   font-weight: 500;
   padding: 8px 12px;
-  border-radius: calc(var(--radius-lg) - 3px);
+  border-radius: calc(var(--radius-md) - 3px);
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.15s ease;
   text-align: center;
 }
 
 .tab-pill-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .tab-pill-btn.active {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  background: rgba(244, 63, 94, 0.16);
+  color: #fb7185;
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* Tab Surface Container */
@@ -55,7 +54,34 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 14px;
+}
+
+/* Compact segmented buttons inside .apple-segmented-control */
+.segment-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: calc(var(--radius-md) - 3px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.segment-btn:hover {
+  color: var(--text-primary);
+}
+
+.segment-btn.active {
+  background: rgba(244, 63, 94, 0.16);
+  color: #fb7185;
+  font-weight: 600;
 }
 
 .caption-text {
@@ -74,7 +100,7 @@
 }
 
 .apple-list-item {
-  background: var(--apple-inner);
+  background: var(--apple-surface);
   border: 1px solid var(--apple-border);
   border-radius: var(--radius-md);
   padding: 12px 16px;
@@ -87,13 +113,13 @@
 
 .apple-list-item:hover {
   background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .item-left-block h4 {
   font-size: 0.88rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -103,8 +129,8 @@
   font-size: 0.65rem;
   font-weight: 600;
   padding: 2px 6px;
-  background: rgba(0, 113, 227, 0.18);
-  border: 1px solid rgba(0, 113, 227, 0.3);
+  background: rgba(244, 63, 94, 0.18);
+  border: 1px solid rgba(244, 63, 94, 0.35);
   color: var(--apple-blue-vibrant);
   border-radius: var(--radius-pill);
 }
@@ -121,14 +147,14 @@
 }
 
 .btn-item-use {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
   border: 1px solid var(--apple-border);
-  color: #ffffff;
+  color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.74rem;
   font-weight: 500;
   padding: 5px 12px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -136,6 +162,7 @@
 .btn-item-use:hover {
   background: var(--apple-blue);
   border-color: var(--apple-blue);
+  color: #ffffff;
 }
 
 .btn-item-del {
@@ -143,7 +170,7 @@
   border: none;
   color: var(--text-tertiary);
   padding: 6px 8px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -157,9 +184,9 @@
 
 /* Guide Container (Bookmarklet & Extension) */
 .apple-guide-box {
-  background: var(--apple-inner);
+  background: var(--apple-surface);
   border: 1px solid var(--apple-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: 20px;
 }
 
@@ -170,7 +197,7 @@
   text-transform: uppercase;
   color: var(--apple-purple);
   background: var(--apple-purple-dim);
-  border: 1px solid rgba(191, 90, 242, 0.35);
+  border: 1px solid rgba(244, 63, 94, 0.35);
   padding: 2px 8px;
   border-radius: var(--radius-pill);
   margin-bottom: 8px;
@@ -179,7 +206,7 @@
 .guide-heading {
   font-size: 1rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 8px;
 }
 
@@ -223,22 +250,21 @@
 
 .bookmarklet-pill-link {
   display: inline-block;
-  background: linear-gradient(180deg, #3a3a3c 0%, #2c2c2e 100%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ffffff;
+  background: var(--apple-surface-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text-primary);
   font-size: 0.82rem;
   font-weight: 600;
   padding: 8px 18px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   text-decoration: none;
   cursor: grab;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
 }
 
 .bookmarklet-pill-link:hover {
-  background: linear-gradient(180deg, #48484a 0%, #3a3a3c 100%);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: var(--apple-surface-hover);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 /* Code Snippet Shell */
@@ -265,7 +291,7 @@
   padding: 10px 12px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: #d1d1d6;
+  color: var(--text-secondary);
   max-height: 120px;
   overflow-y: auto;
   line-height: 1.5;
@@ -273,7 +299,7 @@
 
 /* Extension Banner Card */
 .apple-banner-card {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--apple-surface);
   border: 1px solid var(--apple-border);
   border-radius: var(--radius-md);
   padding: 14px 16px;
@@ -290,7 +316,7 @@
 .banner-copy h4 {
   font-size: 0.88rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .banner-copy p {
@@ -314,7 +340,7 @@
 .apple-table th {
   text-align: left;
   padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-tertiary);
   font-weight: 600;
   border-bottom: 1px solid var(--apple-border);
@@ -322,7 +348,7 @@
 
 .apple-table td {
   padding: 10px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   vertical-align: middle;
 }
 
@@ -347,13 +373,11 @@
   white-space: nowrap;
 }
 
-/* Apple Modal (macOS Sheet Style) */
+/* Modal (dark sheet) */
 .apple-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -363,14 +387,13 @@
 
 .apple-sheet-window {
   background: var(--apple-surface-elevated);
-  backdrop-filter: var(--glass-blur);
   border: 1px solid var(--apple-border-light);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   max-width: 440px;
   width: 100%;
   padding: 24px 28px;
   box-shadow: var(--apple-shadow-elevated);
-  animation: appleModalSpring 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: appleModalSpring 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes appleModalSpring {
@@ -388,7 +411,7 @@
 .sheet-header h3 {
   font-size: 1.1rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .apple-input-field {
@@ -399,7 +422,7 @@
   padding: 10px 14px;
   font-family: var(--font-sans);
   font-size: 0.88rem;
-  color: #ffffff;
+  color: var(--text-primary);
   outline: none;
   margin-top: 6px;
   margin-bottom: 8px;
@@ -408,7 +431,7 @@
 
 .apple-input-field:focus {
   border-color: var(--apple-border-focus);
-  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.25);
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.3);
 }
 
 .sheet-footer {
@@ -418,7 +441,7 @@
   margin-top: 22px;
 }
 
-/* Floating Dynamic Island Toast (Top Center) */
+/* Floating Toast (Top Center) */
 .apple-toast-stage {
   position: fixed;
   top: 28px;
@@ -434,20 +457,18 @@
 
 .apple-island-toast {
   pointer-events: auto;
-  background: rgba(28, 28, 30, 0.92);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--apple-surface-elevated);
   border: 1px solid var(--apple-border-light);
-  border-radius: var(--radius-pill);
-  padding: 8px 18px;
+  border-radius: var(--radius-md);
+  padding: 8px 16px;
   font-size: 0.82rem;
   font-weight: 500;
-  color: #ffffff;
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 9px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65), 0 0 1px 1px rgba(255, 255, 255, 0.1);
-  animation: islandDrop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--apple-shadow-elevated);
+  animation: islandDrop 0.25s ease-out;
 }
 
 @keyframes islandDrop {
@@ -472,3 +493,4 @@
   font-size: 0.74rem;
   color: var(--text-tertiary);
 }
+

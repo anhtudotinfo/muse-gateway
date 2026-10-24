@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { museDriver } from '@/lib/museDriver';
+import { musePool } from '@/lib/musePool';
+import { apiKeyService } from '@/lib/apiKeys';
+import { extractPromptFromResponseInput } from '@/lib/promptExtractor';
+import {
+  buildBridgeInstructions,
+  collectBridgeTools,
+  parseMuseToolCalls,
+  extractWorkspaceCwd,
+  buildProjectContext,
+} from '@/lib/toolBridge';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -11,76 +20,115 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 200, headers: corsHeaders });
 }
 
-function extractPromptFromInput(input: any): string {
-  if (typeof input === 'string') return input;
-  if (!input) return '';
-
-  if (Array.isArray(input)) {
-    const parts: string[] = [];
-    for (const item of input) {
-      if (typeof item === 'string') {
-        parts.push(item);
-      } else if (item && typeof item === 'object') {
-        const role = item.role || item.type || 'user';
-        if (typeof item.content === 'string') {
-          parts.push(`${role}: ${item.content}`);
-        } else if (Array.isArray(item.content)) {
-          const textPieces = item.content
-            .map((c: any) => c.text || (typeof c === 'string' ? c : ''))
-            .filter(Boolean);
-          if (textPieces.length > 0) {
-            parts.push(`${role}: ${textPieces.join(' ')}`);
-          }
-        }
-      }
-    }
-    return parts.length > 0 ? parts.join('\n\n') : JSON.stringify(input);
-  }
-
-  if (typeof input === 'object') {
-    if (input.text) return input.text;
-    if (input.content) return extractPromptFromInput(input.content);
-    return JSON.stringify(input);
-  }
-
-  return String(input);
-}
-
 export async function POST(req: NextRequest) {
   try {
+    const apiKey = apiKeyService.resolveKey(
+      req.headers.get('authorization') || req.headers.get('x-api-key')
+    );
+    if (apiKey === null) {
+      return NextResponse.json(
+        { error: { message: 'Invalid or missing API key.', type: 'authentication_error' } },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+
     const body = await req.json();
     console.log('[Responses API Request received]:', JSON.stringify(body).slice(0, 300));
 
     const model = body.model || 'muse-chat';
+
+    // Per-key access restriction: key may only call allow-listed models/combos
+    if (!apiKeyService.allowsModel(apiKey, model)) {
+      return NextResponse.json(
+        { error: { message: `This API key is not allowed to use model "${model}".`, type: 'permission_error' } },
+        { status: 403, headers: corsHeaders }
+      );
+    }
+    const ua = req.headers.get('user-agent');
+    const keyName = apiKey === 'open' ? 'open' : apiKey.name;
     const stream = body.stream ?? true;
-    const prompt = extractPromptFromInput(body.input || body.messages || body.prompt);
+    const prompt = extractPromptFromResponseInput(body.input || body.messages || body.prompt);
+
+    console.log('[Responses API Extracted User Prompt]:', prompt.slice(0, 200));
+
+    if (!prompt) {
+      return NextResponse.json(
+        { error: { message: 'Could not extract a user prompt from the input.', type: 'invalid_request_error' } },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
+    // Tool definitions advertised by the client (Codex). When present, the
+    // Muse prompt carries bridge instructions and replies may contain
+    // tool-call markers instead of plain text.
+    const tools = collectBridgeTools(body);
+
+    // The bridge runs on the user's machine: when Codex reports a workspace
+    // via <environment_context><cwd>, attach a bounded project snapshot so
+    // Muse can reason about the project even though it cannot emit client-side
+    // tool calls.
+    const cwd = extractWorkspaceCwd(body);
+    const projectCtx = buildProjectContext(cwd);
+
+    const musePrompt =
+      (tools.length ? `${buildBridgeInstructions(tools)}\n` : '') +
+      projectCtx +
+      prompt;
 
     const responseId = 'resp_' + Date.now();
     const itemId = 'item_' + Date.now();
     const created = Math.floor(Date.now() / 1000);
 
+    const buildOutputItems = (reply: string) => {
+      const calls = tools.length ? parseMuseToolCalls(reply) : [];
+      if (calls.length > 0) {
+        return calls.map((call, i) => ({
+          id: `fc_${Date.now()}_${i}`,
+          type: 'function_call',
+          call_id: call.callId,
+          name: call.name,
+          arguments: call.arguments,
+          status: 'completed',
+        }));
+      }
+      return [
+        {
+          id: itemId,
+          type: 'message',
+          status: 'completed',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: reply }],
+        },
+      ];
+    };
+
+    const usageFor = (reply: string) => ({
+      total_tokens: Math.max(1, Math.round(reply.length / 4)),
+      input_tokens: Math.max(1, Math.round(prompt.length / 4)),
+      output_tokens: Math.max(1, Math.round(reply.length / 4)),
+    });
+
     if (stream) {
       const encoder = new TextEncoder();
       const customReadable = new ReadableStream({
         async start(controller) {
-          try {
-            // 1. response.created
-            const createdEvent = {
-              type: 'response.created',
-              response: {
-                id: responseId,
-                object: 'response',
-                created_at: created,
-                model,
-                status: 'in_progress',
-                output: [],
-              },
-            };
-            controller.enqueue(encoder.encode(`event: response.created\ndata: ${JSON.stringify(createdEvent)}\n\n`));
+          // Client (Codex) may disconnect/retry at any time; never let an
+          // enqueue on a dead stream crash the handler.
+          const safeEnqueue = (data: Uint8Array) => {
+            try {
+              controller.enqueue(data);
+            } catch {}
+          };
+          const safeClose = () => {
+            try {
+              controller.close();
+            } catch {}
+          };
+          const sendEvent = (type: string, payload: Record<string, any>) =>
+            safeEnqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`));
 
-            // 2. response.output_item.added
-            const itemAddedEvent = {
-              type: 'response.output_item.added',
+          const emitMessageItemAdded = () => {
+            sendEvent('response.output_item.added', {
               response_id: responseId,
               output_index: 0,
               item: {
@@ -90,133 +138,182 @@ export async function POST(req: NextRequest) {
                 role: 'assistant',
                 content: [],
               },
-            };
-            controller.enqueue(encoder.encode(`event: response.output_item.added\ndata: ${JSON.stringify(itemAddedEvent)}\n\n`));
-
-            // 3. response.content_part.added
-            const partAddedEvent = {
-              type: 'response.content_part.added',
+            });
+            sendEvent('response.content_part.added', {
               response_id: responseId,
               item_id: itemId,
               output_index: 0,
               content_index: 0,
-              part: {
-                type: 'text',
-                text: '',
+              part: { type: 'output_text', text: '' },
+            });
+          };
+
+          try {
+            sendEvent('response.created', {
+              response: {
+                id: responseId,
+                object: 'response',
+                created_at: created,
+                model,
+                status: 'in_progress',
+                output: [],
               },
-            };
-            controller.enqueue(encoder.encode(`event: response.content_part.added\ndata: ${JSON.stringify(partAddedEvent)}\n\n`));
+            });
 
-            let accumulatedText = '';
+            let replyText = '';
+            let replyMedia: string[] = [];
+            if (tools.length) {
+              // Buffered mode: a tool-call marker must never leak as message
+              // text mid-stream — output items are only emitted once known.
+              const r = await musePool.chat({
+                prompt: musePrompt,
+                signal: req.signal,
+                cwd,
+                model,
+                ua,
+                keyName,
+                endpoint: '/v1/responses',
+              });
+              replyText = r.text;
+              replyMedia = r.media;
+            } else {
+              emitMessageItemAdded();
+              const r = await musePool.chat({
+                prompt: musePrompt,
+                signal: req.signal,
+                cwd,
+                model,
+                ua,
+                keyName,
+                endpoint: '/v1/responses',
+                onChunk: (chunk: string) => {
+                  replyText += chunk;
+                  sendEvent('response.output_text.delta', {
+                    response_id: responseId,
+                    item_id: itemId,
+                    output_index: 0,
+                    content_index: 0,
+                    delta: chunk,
+                  });
+                },
+              });
+              replyMedia = r.media;
+            }
 
-            // Stream chunks from Muse
-            await museDriver.chat({
-              prompt,
-              onChunk: (chunk: string) => {
-                accumulatedText += chunk;
-                const deltaEvent = {
-                  type: 'response.output_text.delta',
+            // Generated media links arrive with the completed reply — append
+            // them (and stream a final delta) so clients can resolve files.
+            if (replyMedia.length) {
+              const origin = new URL(req.url).origin;
+              const block =
+                '\n\nAttachments:\n' +
+                replyMedia.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n');
+              replyText += block;
+              if (!tools.length) {
+                sendEvent('response.output_text.delta', {
                   response_id: responseId,
                   item_id: itemId,
                   output_index: 0,
                   content_index: 0,
-                  delta: chunk,
-                };
-                controller.enqueue(encoder.encode(`event: response.output_text.delta\ndata: ${JSON.stringify(deltaEvent)}\n\n`));
-              },
-            });
+                  delta: block,
+                });
+              }
+            }
 
-            // 4. response.output_text.done
-            const textDoneEvent = {
-              type: 'response.output_text.done',
-              response_id: responseId,
-              item_id: itemId,
-              output_index: 0,
-              content_index: 0,
-              text: accumulatedText,
-            };
-            controller.enqueue(encoder.encode(`event: response.output_text.done\ndata: ${JSON.stringify(textDoneEvent)}\n\n`));
+            const calls = tools.length ? parseMuseToolCalls(replyText) : [];
 
-            // 5. response.content_part.done
-            const partDoneEvent = {
-              type: 'response.content_part.done',
-              response_id: responseId,
-              item_id: itemId,
-              output_index: 0,
-              content_index: 0,
-              part: {
-                type: 'text',
-                text: accumulatedText,
-              },
-            };
-            controller.enqueue(encoder.encode(`event: response.content_part.done\ndata: ${JSON.stringify(partDoneEvent)}\n\n`));
-
-            // 6. response.output_item.done
-            const itemDoneEvent = {
-              type: 'response.output_item.done',
-              response_id: responseId,
-              output_index: 0,
-              item: {
-                id: itemId,
-                type: 'message',
-                status: 'completed',
-                role: 'assistant',
-                content: [
-                  {
-                    type: 'text',
-                    text: accumulatedText,
+            if (calls.length > 0) {
+              calls.forEach((call, i) => {
+                const fcId = `fc_${Date.now()}_${i}`;
+                sendEvent('response.output_item.added', {
+                  response_id: responseId,
+                  output_index: i,
+                  item: {
+                    id: fcId,
+                    type: 'function_call',
+                    call_id: call.callId,
+                    name: call.name,
+                    arguments: '',
+                    status: 'in_progress',
                   },
-                ],
-              },
-            };
-            controller.enqueue(encoder.encode(`event: response.output_item.done\ndata: ${JSON.stringify(itemDoneEvent)}\n\n`));
+                });
+                sendEvent('response.function_call_arguments.delta', {
+                  response_id: responseId,
+                  item_id: fcId,
+                  output_index: i,
+                  delta: call.arguments,
+                });
+                sendEvent('response.function_call_arguments.done', {
+                  response_id: responseId,
+                  item_id: fcId,
+                  output_index: i,
+                  arguments: call.arguments,
+                });
+                sendEvent('response.output_item.done', {
+                  response_id: responseId,
+                  output_index: i,
+                  item: {
+                    id: fcId,
+                    type: 'function_call',
+                    call_id: call.callId,
+                    name: call.name,
+                    arguments: call.arguments,
+                    status: 'completed',
+                  },
+                });
+              });
+            } else {
+              if (tools.length) emitMessageItemAdded();
+              sendEvent('response.output_text.done', {
+                response_id: responseId,
+                item_id: itemId,
+                output_index: 0,
+                content_index: 0,
+                text: replyText,
+              });
+              sendEvent('response.content_part.done', {
+                response_id: responseId,
+                item_id: itemId,
+                output_index: 0,
+                content_index: 0,
+                part: { type: 'output_text', text: replyText },
+              });
+              sendEvent('response.output_item.done', {
+                response_id: responseId,
+                output_index: 0,
+                item: {
+                  id: itemId,
+                  type: 'message',
+                  status: 'completed',
+                  role: 'assistant',
+                  content: [{ type: 'output_text', text: replyText }],
+                },
+              });
+            }
 
-            // 7. response.completed
-            const completedEvent = {
-              type: 'response.completed',
+            sendEvent('response.completed', {
               response: {
                 id: responseId,
                 object: 'response',
                 created_at: created,
                 model,
                 status: 'completed',
-                output: [
-                  {
-                    id: itemId,
-                    type: 'message',
-                    status: 'completed',
-                    role: 'assistant',
-                    content: [
-                      {
-                        type: 'text',
-                        text: accumulatedText,
-                      },
-                    ],
-                  },
-                ],
-                usage: {
-                  total_tokens: Math.max(1, Math.round(accumulatedText.length / 4)),
-                  input_tokens: Math.max(1, Math.round(prompt.length / 4)),
-                  output_tokens: Math.max(1, Math.round(accumulatedText.length / 4)),
-                },
+                output: buildOutputItems(replyText),
+                usage: usageFor(replyText),
               },
-            };
-            controller.enqueue(encoder.encode(`event: response.completed\ndata: ${JSON.stringify(completedEvent)}\n\n`));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
+            });
+            safeEnqueue(encoder.encode('data: [DONE]\n\n'));
+            safeClose();
           } catch (err: any) {
             console.error('[Responses API Stream Error]:', err);
-            const errEvent = {
-              type: 'response.failed',
+            sendEvent('response.failed', {
               response: {
                 id: responseId,
                 object: 'response',
                 status: 'failed',
                 error: { message: err?.message || 'Upstream error' },
               },
-            };
-            controller.enqueue(encoder.encode(`event: response.failed\ndata: ${JSON.stringify(errEvent)}\n\n`));
-            controller.close();
+            });
+            safeClose();
           }
         },
       });
@@ -232,32 +329,27 @@ export async function POST(req: NextRequest) {
     }
 
     // Synchronous (Non-streaming) response
-    const reply = await museDriver.chat({ prompt });
+    const { text, media } = await musePool.chat({
+      prompt: musePrompt,
+      signal: req.signal,
+      cwd,
+      model,
+      ua,
+      keyName,
+      endpoint: '/v1/responses',
+    });
+    const origin = new URL(req.url).origin;
+    const content = media.length
+      ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
+      : text;
     const responsePayload = {
       id: responseId,
       object: 'response',
       created_at: created,
       model,
       status: 'completed',
-      output: [
-        {
-          id: itemId,
-          type: 'message',
-          status: 'completed',
-          role: 'assistant',
-          content: [
-            {
-              type: 'text',
-              text: reply,
-            },
-          ],
-        },
-      ],
-      usage: {
-        total_tokens: Math.max(1, Math.round(reply.length / 4)),
-        input_tokens: Math.max(1, Math.round(prompt.length / 4)),
-        output_tokens: Math.max(1, Math.round(reply.length / 4)),
-      },
+      output: buildOutputItems(content),
+      usage: usageFor(content),
     };
 
     return NextResponse.json(responsePayload, { headers: corsHeaders });

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Apple Design System & Styles for Muse Session Hub (Modular Architecture)
+   Design System & Styles for Muse Session Hub (dark dashboard theme)
    ========================================================================== */
 
 @import '../styles/tokens.css';
@@ -7,3 +7,8 @@
 @import '../styles/cookie-deck.css';
 @import '../styles/tabs-modal.css';
 @import '../styles/api-gateway.css';
+@import '../styles/router-shell.css';
+@import '../styles/overview-dark.css';
+@import '../styles/endpoint-9r.css';
+
+

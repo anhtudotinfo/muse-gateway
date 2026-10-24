@@ -8,6 +8,10 @@ export interface Profile {
   cookies: string;
   createdAt: string;
   updatedAt: string;
+  /** Last liveness check timestamp (ISO) — set by /api/sessions/test. */
+  lastTested?: string | null;
+  /** Last liveness result — 'valid' = cookie still works. */
+  lastStatus?: 'valid' | 'invalid' | null;
 }
 
 export interface BrowserDetection {

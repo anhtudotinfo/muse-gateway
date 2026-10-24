@@ -14,16 +14,13 @@
 
 .nav-glass-shell {
   background: var(--apple-surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--apple-border);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-lg);
   padding: 10px 22px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.2s ease;
 }
 
 .brand-monogram {
@@ -36,13 +33,11 @@
 .apple-symbol-badge {
   width: 32px;
   height: 32px;
-  border-radius: 9px;
-  background: linear-gradient(145deg, #2c2c2e, #1c1c1e);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: var(--apple-blue);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .brand-headings {
@@ -55,7 +50,7 @@
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .brand-tag {
@@ -110,8 +105,8 @@
 
 .apple-chip.available {
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Main Container Grid */
@@ -137,16 +132,13 @@
   }
 }
 
-/* Card Container (Frosted Glass Panel) */
+/* Card Container (flat dark panel) */
 .apple-card {
   background: var(--apple-surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--apple-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: var(--apple-shadow);
-  transition: border-color 0.3s ease;
+  transition: border-color 0.2s ease;
 }
 
 .apple-card:hover {
@@ -165,7 +157,7 @@
   font-size: 1.25rem;
   font-weight: 600;
   letter-spacing: -0.025em;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .card-subhead {
@@ -178,3 +170,4 @@
   display: flex;
   gap: 6px;
 }
+

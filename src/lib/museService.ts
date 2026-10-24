@@ -267,6 +267,8 @@ export function saveSessionProfile({ id, name, cookies }: { id?: string; name: s
     cookies,
     updatedAt: now,
     createdAt: existingIdx >= 0 ? sessions[existingIdx].createdAt : now,
+    lastTested: existingIdx >= 0 ? sessions[existingIdx].lastTested ?? null : null,
+    lastStatus: existingIdx >= 0 ? sessions[existingIdx].lastStatus ?? null : null,
   };
 
   if (existingIdx >= 0) {
@@ -277,6 +279,33 @@ export function saveSessionProfile({ id, name, cookies }: { id?: string; name: s
 
   fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
   return sessionObj;
+}
+
+/** Persist a liveness-check outcome onto a saved session. */
+export function updateSessionTest(id: string, valid: boolean): void {
+  ensureDataDir();
+  const sessions = getSavedSessions();
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return;
+  s.lastTested = new Date().toISOString();
+  s.lastStatus = valid ? 'valid' : 'invalid';
+  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+}
+
+/** Extract the session identity — hatch_sess value uniquely identifies a Muse account session. */
+export function sessionIdentity(cookies: string): string | null {
+  const m = cookies.match(/hatch_sess=([^;]+)/);
+  return m ? m[1].trim() : null;
+}
+
+/** Find a saved session that is the SAME account — matching hatch_sess, or exact cookie string when no hatch_sess. */
+export function findSessionByCookies(cookies: string): Profile | undefined {
+  const id1 = sessionIdentity(cookies);
+  const sessions = getSavedSessions();
+  return sessions.find((s) => {
+    const id2 = sessionIdentity(s.cookies);
+    return id1 && id2 ? id1 === id2 : s.cookies.trim() === cookies.trim();
+  });
 }
 
 export function deleteSessionProfile(id: string): boolean {

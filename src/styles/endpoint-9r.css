@@ -1,0 +1,344 @@
+/* ==========================================================================
+   9Router Endpoint & Key theme — ported utility layer (no preflight)
+   Provides the Tailwind v4 theme + utilities the ported components rely on,
+   plus the 9Router palette tokens. Scoped reset under .ep9r only.
+   ========================================================================== */
+
+/* Lock cascade layer order BEFORE imports so the .ep9r base reset stays
+   below utility classes (first-declared order wins between layers). */
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+@source "../**/*.{ts,tsx,js,jsx}";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ============================================================
+   Muse palette — violet brand (matches the dark dashboard theme)
+   ============================================================ */
+:root {
+  /* Brand scale (light) - centered on #f43f5e */
+  --color-brand-50: #fff1f2;
+  --color-brand-100: #ffe0e4;
+  --color-brand-200: #ffc2ca;
+  --color-brand-300: #ff98a6;
+  --color-brand-400: #fb6f84;
+  --color-brand-500: #f43f5e;
+  --color-brand-600: #e02846;
+  --color-brand-700: #bb1f3a;
+  --color-brand-800: #9a1d36;
+  --color-brand-900: #851d33;
+
+  /* Primary (legacy alias for backward compat with existing components) */
+  --color-primary: var(--color-brand-500);
+  --color-primary-hover: var(--color-brand-600);
+  --color-input: #f4f4f5;
+
+  /* Surfaces & backgrounds (light) */
+  --color-bg: #FDFAF6;
+  --color-bg-alt: #F7F3EE;
+  --color-bg-subtle: rgba(0, 0, 0, 0.03);
+  --color-bg-hover: rgba(0, 0, 0, 0.05);
+  --color-surface: #ffffff;
+  --color-surface-2: #f4f4f5;
+  --color-surface-3: #e7e7e9;
+  --color-sidebar: rgba(244, 241, 236, 0.85);
+
+  /* Borders */
+  --color-border: #e5e7eb;
+  --color-border-subtle: #f1f1f3;
+
+  /* Text */
+  --color-text: #0a0a0a;
+  --color-text-main: #0a0a0a;
+  --color-text-muted: #6B7280;
+  --color-text-subtle: #9CA3AF;
+
+  /* Status */
+  --color-danger: #cf222e;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-info: #3B82F6;
+
+  /* Radius */
+  --radius-brand: 10px;
+  --radius-brand-lg: 14px;
+
+  /* Shadows */
+  --shadow-soft: 0 1px 2px 0 rgba(0,0,0,0.04);
+  --shadow-warm: 0 2px 12px -2px rgba(244, 63, 94, 0.18);
+  --shadow-elevated: 0 12px 28px -4px rgba(60, 50, 45, 0.06);
+  --shadow-elev:
+    inset 0 1px 0 0 rgba(255,255,255,0.8),
+    0 1px 2px rgba(15,23,42,0.04),
+    0 12px 36px -8px rgba(15,23,42,0.10);
+  --shadow-focus: 0 0 0 3px rgba(244, 63, 94,0.18);
+}
+
+.dark {
+  --color-brand-50: #fff1f2;
+  --color-brand-100: #ffe0e4;
+  --color-brand-200: #ffc2ca;
+  --color-brand-300: #ff98a6;
+  --color-brand-400: #fb6f84;
+  --color-brand-500: #f43f5e;
+  --color-brand-600: #e02846;
+  --color-brand-700: #bb1f3a;
+  --color-brand-800: #9a1d36;
+  --color-brand-900: #851d33;
+
+  --color-primary: #f43f5e;
+  --color-primary-hover: #fb7185;
+  --color-input: #22222c;
+
+  --color-bg: #101014;
+  --color-bg-alt: #141419;
+  --color-bg-subtle: rgba(255, 255, 255, 0.04);
+  --color-bg-hover: rgba(255, 255, 255, 0.07);
+  --color-surface: #1a1a22;
+  --color-surface-2: #22222c;
+  --color-surface-3: #2c2c38;
+  --color-sidebar: rgba(20, 20, 28, 0.85);
+
+  --color-border: #2a2a35;
+  --color-border-subtle: #232330;
+
+  --color-text: #ededed;
+  --color-text-main: #ededed;
+  --color-text-muted: #9ca3af;
+  --color-text-subtle: #6b7280;
+
+  --color-danger: #ef4444;
+  --color-success: #22c55e;
+  --color-warning: #fbbf24;
+  --color-info: #60a5fa;
+
+  --shadow-soft: 0 1px 2px 0 rgba(0,0,0,0.3);
+  --shadow-warm: 0 2px 12px -2px rgba(244, 63, 94, 0.25);
+  --shadow-elevated: 0 12px 28px -4px rgba(0, 0, 0, 0.45);
+  --shadow-elev:
+    inset 0 1px 0 0 rgba(255,255,255,0.06),
+    0 1px 2px rgba(0,0,0,0.4),
+    0 16px 48px -8px rgba(0,0,0,0.55);
+  --shadow-focus: 0 0 0 3px rgba(244, 63, 94,0.18);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  /* Brand scale */
+  --color-brand-50: var(--color-brand-50);
+  --color-brand-100: var(--color-brand-100);
+  --color-brand-200: var(--color-brand-200);
+  --color-brand-300: var(--color-brand-300);
+  --color-brand-400: var(--color-brand-400);
+  --color-brand-500: var(--color-brand-500);
+  --color-brand-600: var(--color-brand-600);
+  --color-brand-700: var(--color-brand-700);
+  --color-brand-800: var(--color-brand-800);
+  --color-brand-900: var(--color-brand-900);
+
+  /* Primary aliases */
+  --color-primary: var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
+  --color-input: var(--color-input);
+
+  /* Semantic */
+  --color-bg: var(--color-bg);
+  --color-bg-alt: var(--color-bg-alt);
+  --color-bg-subtle: var(--color-bg-subtle);
+  --color-bg-hover: var(--color-bg-hover);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-surface-3: var(--color-surface-3);
+  --color-sidebar: var(--color-sidebar);
+  --color-border: var(--color-border);
+  --color-border-subtle: var(--color-border-subtle);
+  --color-text: var(--color-text);
+  --color-text-main: var(--color-text-main);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-subtle: var(--color-text-subtle);
+  --color-accent: var(--color-brand-500);
+  --color-danger: var(--color-danger);
+  --color-error: var(--color-danger);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-info: var(--color-info);
+
+  /* Radius */
+  --radius-brand: var(--radius-brand);
+  --radius-brand-lg: var(--radius-brand-lg);
+
+  /* Shadows */
+  --shadow-soft: var(--shadow-soft);
+  --shadow-warm: var(--shadow-warm);
+  --shadow-elevated: var(--shadow-elevated);
+  --shadow-elev: var(--shadow-elev);
+  --shadow-focus: var(--shadow-focus);
+
+  /* Font - Inter primary, Apple system fallback */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif;
+}
+
+/* ============================================================
+   Scoped reset — replaces skipped Tailwind preflight inside .ep9r
+   Sits in @layer base so utility classes still win.
+   ============================================================ */
+@layer base {
+  .ep9r button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  .ep9r button:disabled { cursor: not-allowed; }
+  .ep9r input,
+  .ep9r textarea,
+  .ep9r select { font: inherit; color: inherit; }
+  .ep9r input:focus { outline: none; }
+  .ep9r a { color: inherit; text-decoration: none; }
+  .ep9r code { font-family: inherit; }
+  .ep9r svg { display: inline-block; vertical-align: middle; }
+}
+
+/* Material Symbols icon font */
+.material-symbols-outlined { opacity: 0; }
+.fonts-loaded .material-symbols-outlined { opacity: 1; transition: opacity .12s ease-out; }
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined', sans-serif;
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+.material-symbols-outlined.fill-1 {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Scrollbar (custom-scrollbar utility kept for compat) */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.3);
+  border-radius: 20px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: var(--color-primary); }
+
+/* Animations used by the ported UI */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.fade-in { animation: fadeIn 0.2s ease-out forwards; }
+@keyframes slideInFromRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.slide-in-right { animation: slideInFromRight 0.25s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+@keyframes slideInFromTop {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.slide-in-top { animation: slideInFromTop 0.18s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+
+/* ============================================================
+   Usage topology: router pulse + electric edge beam + RF controls
+   ============================================================ */
+@keyframes topology-router-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 8px #fde047,
+      0 0 20px color-mix(in srgb, var(--color-primary) 65%, transparent),
+      0 0 32px rgba(34, 211, 238, 0.4),
+      inset 0 0 10px rgba(253, 224, 71, 0.3);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow:
+      0 0 14px #fef08a,
+      0 0 28px #facc15,
+      0 0 44px rgba(34, 211, 238, 0.6),
+      inset 0 0 14px rgba(255, 255, 255, 0.25);
+  }
+}
+@keyframes topology-router-icon-shake {
+  0%, 100% { transform: rotate(0deg) scale(1); filter: drop-shadow(0 0 2px #fde047); }
+  25% { transform: rotate(-5deg) scale(1.08); filter: drop-shadow(0 0 6px #facc15); }
+  75% { transform: rotate(5deg) scale(1.08); filter: drop-shadow(0 0 6px #22d3ee); }
+}
+@keyframes topology-router-label-flicker {
+  0%, 100% { text-shadow: 0 0 6px #fde047, 0 0 12px #22d3ee; }
+  50% { text-shadow: 0 0 10px #fff, 0 0 18px #facc15; }
+}
+@keyframes topology-edge-dash {
+  to { stroke-dashoffset: -36; }
+}
+@keyframes topology-edge-flicker {
+  0%, 100% { opacity: 0.85; }
+  40% { opacity: 1; }
+  55% { opacity: 0.55; }
+  70% { opacity: 1; }
+}
+.topology-router-core {
+  animation: topology-router-pulse 0.75s ease-in-out infinite;
+  border-color: #fde047 !important;
+}
+.topology-router-icon {
+  animation: topology-router-icon-shake 0.45s ease-in-out infinite;
+}
+.topology-router-label {
+  animation: topology-router-label-flicker 0.7s ease-in-out infinite;
+}
+.topology-router-badge {
+  box-shadow: 0 0 10px #fde047, 0 0 16px rgba(34, 211, 238, 0.6);
+}
+.topology-edge-kame {
+  stroke-dasharray: 8 6;
+  animation: topology-edge-dash 0.22s linear infinite;
+}
+.topology-edge-halo {
+  animation: topology-edge-flicker 0.18s steps(2) infinite;
+}
+.topology-edge-plasma {
+  stroke-dasharray: 14 10;
+  animation: topology-edge-dash 0.18s linear infinite, topology-edge-flicker 0.22s steps(3) infinite;
+}
+
+/* React Flow controls: match app theme */
+.react-flow-controls-custom {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+.react-flow-controls-custom button {
+  background: var(--color-surface);
+  color: var(--color-text-main);
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.react-flow-controls-custom button:last-child {
+  border-bottom: 0;
+}
+.react-flow-controls-custom button:hover {
+  background: var(--color-bg-alt);
+}

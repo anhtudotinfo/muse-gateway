@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { museDriver } from '@/lib/museDriver';
-import type { ChatCompletionRequest, ChatMessage } from '@/types';
+import { musePool } from '@/lib/musePool';
+import { apiKeyService } from '@/lib/apiKeys';
+import { extractPromptFromChatMessages } from '@/lib/promptExtractor';
+import { extractWorkspaceCwd } from '@/lib/toolBridge';
+import type { ChatCompletionRequest } from '@/types';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,8 +17,27 @@ export async function OPTIONS() {
 
 export async function POST(req: NextRequest) {
   try {
+    const apiKey = apiKeyService.resolveKey(
+      req.headers.get('authorization') || req.headers.get('x-api-key')
+    );
+    if (apiKey === null) {
+      return NextResponse.json(
+        { error: { message: 'Invalid or missing API key.', type: 'authentication_error' } },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+
     const body: ChatCompletionRequest = await req.json();
     const { model = 'muse-chat', messages = [], stream = false } = body;
+
+    // Per-key access restriction: key may only call allow-listed models/combos
+    if (!apiKeyService.allowsModel(apiKey, model)) {
+      return NextResponse.json(
+        { error: { message: `This API key is not allowed to use model "${model}".`, type: 'permission_error' } },
+        { status: 403, headers: corsHeaders }
+      );
+    }
+    const ua = req.headers.get('user-agent');
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -24,20 +46,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Format messages for prompt
-    let formattedPrompt = '';
-    if (messages.length === 1) {
-      const c = messages[0].content;
-      formattedPrompt = typeof c === 'string' ? c : JSON.stringify(c);
-    } else {
-      const parts = messages.map((m: ChatMessage) => {
-        const role = m.role === 'user' ? 'User' : m.role === 'system' ? 'System Instruction' : 'Assistant';
-        const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-        return `${role}: ${text}`;
-      });
-      formattedPrompt = parts.join('\n\n') + '\n\nAssistant:';
+    // Lấy tin nhắn user cuối, bỏ qua context envelopes do client inject
+    const formattedPrompt = extractPromptFromChatMessages(messages);
+
+    // Multimodal parts on the last user message — image_url entries arrive as
+    // data: URLs and are attached to the Muse composer (frame bridging).
+    const images: string[] = [];
+    const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
+    if (Array.isArray(lastUser?.content)) {
+      for (const part of lastUser.content) {
+        const u =
+          (typeof part?.image_url === 'object' ? part.image_url?.url : part?.image_url) ||
+          (part?.type === 'input_image' ? part?.image_url : null);
+        if (typeof u === 'string' && u.startsWith('data:')) images.push(u);
+      }
     }
 
+    if (!formattedPrompt) {
+      return NextResponse.json(
+        { error: { message: 'Could not extract a user prompt from messages.', type: 'invalid_request_error' } },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
+    const cwd = extractWorkspaceCwd(body);
+    const keyName = apiKey === 'open' ? 'open' : apiKey.name;
     const completionId = 'chatcmpl-' + Date.now();
     const created = Math.floor(Date.now() / 1000);
 
@@ -46,9 +79,28 @@ export async function POST(req: NextRequest) {
       const encoder = new TextEncoder();
       const customReadable = new ReadableStream({
         async start(controller) {
+          // Client may disconnect/retry at any time — never let an enqueue
+          // on a dead stream crash the handler.
+          const safeEnqueue = (data: Uint8Array) => {
+            try {
+              controller.enqueue(data);
+            } catch {}
+          };
+          const safeClose = () => {
+            try {
+              controller.close();
+            } catch {}
+          };
           try {
-            await museDriver.chat({
+            const { media } = await musePool.chat({
               prompt: formattedPrompt,
+              images,
+              signal: req.signal,
+              cwd,
+              model,
+              ua,
+              keyName,
+              endpoint: '/v1/chat/completions',
               onChunk: (chunk: string) => {
                 const ssePayload = {
                   id: completionId,
@@ -63,9 +115,33 @@ export async function POST(req: NextRequest) {
                     },
                   ],
                 };
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
+                safeEnqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
               },
             });
+
+            // Media attachments arrive after the reply completes — emit as a
+            // final content delta so streaming clients see the links too.
+            // Local /api/media/* paths resolve against the request origin.
+            if (media.length) {
+              const mediaPayload = {
+                id: completionId,
+                object: 'chat.completion.chunk',
+                created,
+                model,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      content:
+                        '\n\nAttachments:\n' +
+                        media.map((u) => `- ${u.startsWith('http') ? u : new URL(req.url).origin + u}`).join('\n'),
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              };
+              safeEnqueue(encoder.encode(`data: ${JSON.stringify(mediaPayload)}\n\n`));
+            }
 
             // Send stop chunk
             const stopPayload = {
@@ -81,16 +157,16 @@ export async function POST(req: NextRequest) {
                 },
               ],
             };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(stopPayload)}\n\n`));
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            controller.close();
+            safeEnqueue(encoder.encode(`data: ${JSON.stringify(stopPayload)}\n\n`));
+            safeEnqueue(encoder.encode('data: [DONE]\n\n'));
+            safeClose();
           } catch (err: any) {
             console.error('[API Stream Error]:', err);
             const errPayload = {
               error: { message: err?.message || 'Upstream error', type: 'upstream_error' },
             };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errPayload)}\n\n`));
-            controller.close();
+            safeEnqueue(encoder.encode(`data: ${JSON.stringify(errPayload)}\n\n`));
+            safeClose();
           }
         },
       });
@@ -106,9 +182,22 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle Synchronous / Non-streaming JSON response
-    const reply = await museDriver.chat({ prompt: formattedPrompt });
+    const { text, media } = await musePool.chat({
+      prompt: formattedPrompt,
+      images,
+      signal: req.signal,
+      cwd,
+      model,
+      ua,
+      keyName,
+      endpoint: '/v1/chat/completions',
+    });
+    const origin = new URL(req.url).origin;
+    const content = media.length
+      ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
+      : text;
     const promptTokens = Math.max(1, Math.round(formattedPrompt.length / 4));
-    const completionTokens = Math.max(1, Math.round(reply.length / 4));
+    const completionTokens = Math.max(1, Math.round(content.length / 4));
 
     const responsePayload = {
       id: completionId,
@@ -120,7 +209,7 @@ export async function POST(req: NextRequest) {
           index: 0,
           message: {
             role: 'assistant',
-            content: reply,
+            content,
           },
           finish_reason: 'stop',
         },

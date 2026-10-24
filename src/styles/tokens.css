@@ -1,60 +1,63 @@
 /* ==========================================================================
-   Apple Design System & Tokens for Muse Session Hub
+   Design Tokens — Muse dark theme (dashboard-style: near-black + violet brand)
    ========================================================================== */
 
 :root {
-  /* Apple Neutral Palette (Dark Mode Base) */
-  --apple-bg: #000000;
-  --apple-surface: rgba(28, 28, 30, 0.72);
-  --apple-surface-hover: rgba(44, 44, 46, 0.8);
-  --apple-surface-elevated: rgba(38, 38, 42, 0.85);
-  --apple-inner: rgba(18, 18, 20, 0.75);
+  /* Surfaces (dark, cool neutral — matches ep9r dark surface scale) */
+  --apple-bg: #0b0b0f;
+  --apple-surface: #1a1a22;
+  --apple-surface-hover: #22222c;
+  --apple-surface-elevated: #22222c;
+  --apple-inner: #121218;
 
   /* Hairline Borders & Dividers */
-  --apple-border: rgba(255, 255, 255, 0.09);
-  --apple-border-light: rgba(255, 255, 255, 0.14);
-  --apple-border-focus: rgba(41, 151, 255, 0.6);
+  --apple-border: rgba(255, 255, 255, 0.06);
+  --apple-border-light: rgba(255, 255, 255, 0.1);
+  --apple-border-focus: rgba(244, 63, 94, 0.5);
 
-  /* Apple System Colors (Cupertino Vibrancy) */
-  --apple-blue: #0071e3;
-  --apple-blue-hover: #0077ed;
-  --apple-blue-glow: rgba(0, 113, 227, 0.28);
-  --apple-blue-vibrant: #2997ff;
+  /* Brand accent (Muse violet — lighter on dark bg) */
+  --apple-blue: #f43f5e;
+  --apple-blue-hover: #fb7185;
+  --apple-blue-glow: rgba(244, 63, 94, 0.25);
+  --apple-blue-vibrant: #fb7185;
 
-  --apple-green: #30d158;
-  --apple-green-dim: rgba(48, 209, 88, 0.14);
-  --apple-green-border: rgba(48, 209, 88, 0.35);
+  --apple-green: #34d399;
+  --apple-green-dim: rgba(52, 211, 153, 0.14);
+  --apple-green-border: rgba(52, 211, 153, 0.35);
 
-  --apple-red: #ff453a;
-  --apple-red-dim: rgba(255, 69, 58, 0.14);
-  --apple-red-border: rgba(255, 69, 58, 0.35);
+  --apple-red: #f43f5e;
+  --apple-red-dim: rgba(244, 63, 94, 0.14);
+  --apple-red-border: rgba(244, 63, 94, 0.35);
 
-  --apple-purple: #bf5af2;
-  --apple-purple-dim: rgba(191, 90, 242, 0.15);
+  --apple-purple: #fb7185;
+  --apple-purple-dim: rgba(244, 63, 94, 0.14);
 
-  --apple-orange: #ff9f0a;
-  --apple-yellow: #ffd60a;
+  --apple-pink: #fb7185;
+  --apple-pink-dim: rgba(251, 113, 133, 0.14);
 
-  /* Typography Colors (Apple Human Interface Levels) */
-  --text-primary: #f5f5f7;
-  --text-secondary: #a1a1a6;
-  --text-tertiary: #6e6e73;
-  --text-quaternary: #48484a;
+  --apple-orange: #fbbf24;
+  --apple-yellow: #facc15;
+
+  /* Typography Colors */
+  --text-primary: #f0f0f5;
+  --text-secondary: #b9b9c8;
+  --text-tertiary: #7e7e92;
+  --text-quaternary: #52525f;
 
   /* Fonts */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 
   /* Radii & Shadows */
-  --radius-xl: 22px;
-  --radius-lg: 16px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
+  --radius-xl: 14px;
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
   --radius-pill: 9999px;
 
-  --apple-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.65), 0 0 1px 1px rgba(255, 255, 255, 0.05);
-  --apple-shadow-elevated: 0 24px 60px -15px rgba(0, 0, 0, 0.8), 0 0 1px 1px rgba(255, 255, 255, 0.1);
-  --glass-blur: blur(36px) saturate(190%);
+  --apple-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --apple-shadow-elevated: 0 8px 30px rgba(0, 0, 0, 0.55);
+  --glass-blur: none;
 }
 
 *, *::before, *::after {
@@ -76,38 +79,36 @@ body {
   min-height: 100vh;
   position: relative;
   overflow-x: hidden;
-  line-height: 1.47059;
+  line-height: 1.5;
   font-weight: 400;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle Apple Atmospheric Background Light */
-.apple-atmospheric {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
+/* Ambient background — flat dark, no glows */
+
+/* Dark scrollbars (matches the flat dashboard theme) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-.ambient-spot-1 {
-  position: absolute;
-  top: -180px;
-  left: 20%;
-  width: 700px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(0, 113, 227, 0.15) 0%, transparent 68%);
-  filter: blur(100px);
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.ambient-spot-2 {
-  position: absolute;
-  top: 15%;
-  right: -100px;
-  width: 600px;
-  height: 600px;
-  background: radial-gradient(circle, rgba(191, 90, 242, 0.12) 0%, transparent 70%);
-  filter: blur(120px);
+::-webkit-scrollbar-thumb {
+  background: #2a2a35;
+  border-radius: 5px;
+  border: 2px solid var(--apple-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a48;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a35 transparent;
 }

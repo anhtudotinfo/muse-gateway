@@ -1,0 +1,10 @@
+﻿{
+    "messages":  [
+                     {
+                         "content":  "Chào bạn, hãy viết một câu ngắn giới thiệu về Hội An.",
+                         "role":  "user"
+                     }
+                 ],
+    "model":  "muse-chat",
+    "stream":  false
+}
