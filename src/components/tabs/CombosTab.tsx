@@ -22,7 +22,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) => void }) {
-  const { maskEmails } = useApp();
+  const { maskEmails, showToast } = useApp();
   const [combos, setCombos] = useState<PoolCombo[]>([]);
   const [accounts, setAccounts] = useState<{ id: string; name: string }[]>([]);
   const [editing, setEditing] = useState<PoolCombo | null>(null);
@@ -62,26 +62,48 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
 
   const save = async () => {
     if (!formName.trim()) return;
-    if (editing) {
-      await fetch('/api/combos', {
-        method: 'PATCH',
+    try {
+      const res = await fetch('/api/combos', {
+        method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: editing.id, name: formName, strategy: formStrategy, accountIds: formAccounts }),
+        body: JSON.stringify(
+          editing
+            ? { id: editing.id, name: formName, strategy: formStrategy, accountIds: formAccounts }
+            : { name: formName, strategy: formStrategy, accountIds: formAccounts }
+        ),
       });
-    } else {
-      await fetch('/api/combos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: formName, strategy: formStrategy, accountIds: formAccounts }),
-      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(j.error || `Lỗi ${res.status}`, 'error');
+        return;
+      }
+      setShowForm(false);
+      showToast(editing ? 'Đã lưu combo' : `Đã tạo combo "${formName.trim()}"`, 'success');
+      refresh();
+    } catch (e: any) {
+      showToast('Lỗi lưu combo: ' + (e?.message || e), 'error');
     }
-    setShowForm(false);
-    refresh();
   };
 
-  const remove = async (id: string) => {
-    await fetch(`/api/combos?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-    refresh();
+  const remove = async (combo: PoolCombo) => {
+    if (
+      !confirm(
+        `Xóa combo "${combo.name}"?\n\nCombo chỉ là group routing — các tài khoản trong combo vẫn được giữ nguyên.`
+      )
+    )
+      return;
+    try {
+      const res = await fetch(`/api/combos?id=${encodeURIComponent(combo.id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        showToast(j.error || `Lỗi xóa combo (${res.status})`, 'error');
+        return;
+      }
+      showToast(`Đã xóa combo "${combo.name}"`, 'info');
+      refresh();
+    } catch (e: any) {
+      showToast('Lỗi xóa combo: ' + (e?.message || e), 'error');
+    }
   };
 
   const accountName = (id: string) => maskName(accounts.find((a) => a.id === id)?.name || id, maskEmails);
@@ -180,7 +202,7 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
                   Copy
                 </button>
                 <button type="button" className="apple-tool-btn" onClick={() => startEdit(c)}>Edit</button>
-                <button type="button" className="btn-item-del" onClick={() => remove(c.id)}>Delete</button>
+                <button type="button" className="btn-item-del" onClick={() => remove(c)}>Delete</button>
               </div>
             </div>
           ))

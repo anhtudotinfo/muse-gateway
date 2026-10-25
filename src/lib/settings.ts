@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 
 // App-level settings persisted to data/settings.json.
 // `hasPassword` reports whether the dashboard still uses an insecure default
@@ -32,20 +33,15 @@ class SettingsService {
   // settings.json is the source of truth — re-read on every call so
   // mutations from other module realms (Next dev workers) are never stale.
   private load(): void {
-    try {
-      if (fs.existsSync(SETTINGS_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
-        if (raw && typeof raw === 'object') {
-          this.settings = { ...DEFAULTS, ...raw };
-        }
-      }
-    } catch {}
+    const raw = readJsonFile<Partial<AppSettings> | null>(SETTINGS_FILE, null);
+    if (raw && typeof raw === 'object') {
+      this.settings = { ...DEFAULTS, ...raw };
+    }
   }
 
   private save(): void {
     try {
-      fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
-      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2), 'utf8');
+      writeJsonAtomic(SETTINGS_FILE, this.settings);
     } catch {}
   }
 

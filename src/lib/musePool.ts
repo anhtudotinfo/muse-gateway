@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { getSavedSessions } from './museService';
 import { museDriver } from './museDriver';
 import { settingsService } from './settings';
@@ -129,23 +130,19 @@ class MusePoolService {
   }
 
   private load(): void {
-    try {
-      if (fs.existsSync(POOL_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(POOL_FILE, 'utf8'));
-        this.state = {
-          strategy: raw.strategy === 'fallback' ? 'fallback' : raw.strategy === 'fusion' ? 'fusion' : 'round-robin',
-          rrPointer: typeof raw.rrPointer === 'number' ? raw.rrPointer : 0,
-          accounts: raw.accounts && typeof raw.accounts === 'object' ? raw.accounts : {},
-          combos: Array.isArray(raw.combos) ? raw.combos : [],
-        };
-      }
-    } catch {}
+    const raw = readJsonFile<Partial<PoolFile> | null>(POOL_FILE, null);
+    if (!raw || typeof raw !== 'object') return;
+    this.state = {
+      strategy: raw.strategy === 'fallback' ? 'fallback' : raw.strategy === 'fusion' ? 'fusion' : 'round-robin',
+      rrPointer: typeof raw.rrPointer === 'number' ? raw.rrPointer : 0,
+      accounts: raw.accounts && typeof raw.accounts === 'object' ? raw.accounts : {},
+      combos: Array.isArray(raw.combos) ? raw.combos : [],
+    };
   }
 
   private save(): void {
     try {
-      fs.mkdirSync(path.dirname(POOL_FILE), { recursive: true });
-      fs.writeFileSync(POOL_FILE, JSON.stringify(this.state, null, 2), 'utf8');
+      writeJsonAtomic(POOL_FILE, this.state);
     } catch {}
   }
 

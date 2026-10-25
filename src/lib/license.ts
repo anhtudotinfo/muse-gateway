@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 
 // Offline license system — no license server needed.
 //
@@ -123,17 +124,14 @@ export function checkKey(key: string): KeyCheck {
 }
 
 function readFile(): LicenseFile | null {
-  try {
-    const raw = JSON.parse(fs.readFileSync(LICENSE_FILE, 'utf8'));
-    if (raw && typeof raw === 'object' && raw.licenseKey) return raw as LicenseFile;
-  } catch {}
-  return null;
+  const raw = readJsonFile<LicenseFile | null>(LICENSE_FILE, null);
+  return raw && typeof raw === 'object' && raw.licenseKey ? raw : null;
 }
 
 function writeFile(data: LicenseFile | null): void {
   try {
     fs.mkdirSync(path.dirname(LICENSE_FILE), { recursive: true });
-    if (data) fs.writeFileSync(LICENSE_FILE, JSON.stringify(data, null, 2), 'utf8');
+    if (data) writeJsonAtomic(LICENSE_FILE, data);
     else if (fs.existsSync(LICENSE_FILE)) fs.unlinkSync(LICENSE_FILE);
   } catch {}
 }

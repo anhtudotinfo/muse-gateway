@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 
 // Tunnel manager: Cloudflare quick tunnel (cloudflared) + Tailscale funnel.
 // State persists in data/tunnel.json so "enabled" intent survives restarts;
@@ -39,18 +40,14 @@ class TunnelManager {
   // tunnel.json is the source of truth — re-read on every call so state
   // written by other module realms (Next dev workers) is never stale.
   private load() {
-    try {
-      if (fs.existsSync(STATE_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-        if (raw && typeof raw === 'object') this.persisted = raw;
-      }
-    } catch {}
+    const raw = readJsonFile<TunnelPersisted | null>(STATE_FILE, null);
+    if (raw && typeof raw === 'object') this.persisted = raw;
   }
 
   private save() {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(STATE_FILE, JSON.stringify(this.persisted, null, 2), 'utf8');
+      writeJsonAtomic(STATE_FILE, this.persisted);
     } catch {}
   }
 

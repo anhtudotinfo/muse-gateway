@@ -34,7 +34,7 @@ interface AppContextValue {
   setSelectedBrowser: (b: 'chrome' | 'edge') => void;
   availableBrowsers: BrowserDetection;
   launchBrowser: (cookies: string) => Promise<{ ok: boolean; error?: string }>;
-  deleteProfile: (id: string) => Promise<void>;
+  deleteProfile: (id: string) => Promise<boolean>;
   maskEmails: boolean;
   setMaskEmails: (v: boolean) => void;
 }
@@ -137,9 +137,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 
   const deleteProfile = useCallback(
-    async (id: string) => {
-      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-      reloadProfiles();
+    async (id: string): Promise<boolean> => {
+      try {
+        const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+        if (!res.ok) return false;
+      } catch {
+        return false;
+      }
+      await reloadProfiles();
+      return true;
     },
     [reloadProfiles]
   );

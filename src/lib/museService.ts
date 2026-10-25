@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import https from 'https';
 import puppeteer from 'puppeteer-core';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 import type { CookieMap, Profile, SessionTestResult, BrowserDetection } from '@/types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -15,7 +16,7 @@ function ensureDataDir(): void {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
   if (!fs.existsSync(SESSIONS_FILE)) {
-    fs.writeFileSync(SESSIONS_FILE, '[]', 'utf8');
+    writeJsonAtomic(SESSIONS_FILE, []);
   }
 }
 
@@ -245,12 +246,7 @@ export async function launchBrowserWithCookies(cookies: string, browserType: str
 // Session store operations
 export function getSavedSessions(): Profile[] {
   ensureDataDir();
-  try {
-    const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
+  return readJsonFile<Profile[]>(SESSIONS_FILE, [], Array.isArray);
 }
 
 export function saveSessionProfile({ id, name, cookies }: { id?: string; name: string; cookies: string }): Profile {
@@ -277,7 +273,7 @@ export function saveSessionProfile({ id, name, cookies }: { id?: string; name: s
     sessions.unshift(sessionObj);
   }
 
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+  writeJsonAtomic(SESSIONS_FILE, sessions);
   return sessionObj;
 }
 
@@ -289,7 +285,7 @@ export function updateSessionTest(id: string, valid: boolean): void {
   if (!s) return;
   s.lastTested = new Date().toISOString();
   s.lastStatus = valid ? 'valid' : 'invalid';
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+  writeJsonAtomic(SESSIONS_FILE, sessions);
 }
 
 /** Extract the session identity — hatch_sess value uniquely identifies a Muse account session. */
@@ -312,7 +308,7 @@ export function deleteSessionProfile(id: string): boolean {
   ensureDataDir();
   let sessions = getSavedSessions();
   sessions = sessions.filter(s => s.id !== id);
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf8');
+  writeJsonAtomic(SESSIONS_FILE, sessions);
   return true;
 }
 

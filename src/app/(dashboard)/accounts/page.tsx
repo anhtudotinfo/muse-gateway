@@ -209,8 +209,8 @@ export default function AccountsPage() {
 
   const handleDeleteProfile = async (id: string, name: string) => {
     if (confirm(`Bạn có chắc muốn xóa hồ sơ "${maskName(name, maskEmails)}" không?`)) {
-      await deleteProfile(id);
-      showToast('Đã xóa hồ sơ', 'info');
+      const ok = await deleteProfile(id);
+      showToast(ok ? 'Đã xóa hồ sơ' : 'Xóa hồ sơ thất bại — thử lại', ok ? 'info' : 'error');
     }
   };
 

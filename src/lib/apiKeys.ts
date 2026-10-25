@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { readJsonFile, writeJsonAtomic } from './safeJson';
 
 // API key management (9router-style): keys live in data/keys.json.
 // When at least one ENABLED key exists, /v1/* requires Bearer auth.
@@ -29,26 +30,18 @@ class ApiKeyService {
   // keys.json is the source of truth — re-read on every call so mutations
   // from other module realms/processes (Next dev workers) are never stale.
   private load(): void {
-    try {
-      if (fs.existsSync(KEYS_FILE)) {
-        const raw = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
-        if (Array.isArray(raw)) this.keys = raw;
-        else if (raw && typeof raw === 'object') {
-          if (Array.isArray(raw.keys)) this.keys = raw.keys;
-          if (typeof raw.requireAuth === 'boolean') this.requireAuth = raw.requireAuth;
-        }
-      }
-    } catch {}
+    const raw = readJsonFile<unknown>(KEYS_FILE, null);
+    if (Array.isArray(raw)) this.keys = raw as ApiKeyRecord[];
+    else if (raw && typeof raw === 'object') {
+      const o = raw as { keys?: unknown; requireAuth?: unknown };
+      if (Array.isArray(o.keys)) this.keys = o.keys as ApiKeyRecord[];
+      if (typeof o.requireAuth === 'boolean') this.requireAuth = o.requireAuth;
+    }
   }
 
   private save(): void {
     try {
-      fs.mkdirSync(path.dirname(KEYS_FILE), { recursive: true });
-      fs.writeFileSync(
-        KEYS_FILE,
-        JSON.stringify({ keys: this.keys, requireAuth: this.requireAuth }, null, 2),
-        'utf8'
-      );
+      writeJsonAtomic(KEYS_FILE, { keys: this.keys, requireAuth: this.requireAuth });
     } catch {}
   }
 
