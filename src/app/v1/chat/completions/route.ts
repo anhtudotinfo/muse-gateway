@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body: ChatCompletionRequest = await req.json();
-    const { model = 'muse-chat', messages = [], stream = false } = body;
+    const { model = 'muse-chat', messages = [], stream = false, new_chat = false } = body;
 
     // Per-key access restriction: key may only call allow-listed models/combos
     if (!apiKeyService.allowsModel(apiKey, model)) {
@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
               ua,
               keyName,
               endpoint: '/v1/chat/completions',
+              newChat: new_chat,
               onChunk: (chunk: string) => {
                 const ssePayload = {
                   id: completionId,
@@ -191,6 +192,7 @@ export async function POST(req: NextRequest) {
       ua,
       keyName,
       endpoint: '/v1/chat/completions',
+      newChat: new_chat,
     });
     const origin = new URL(req.url).origin;
     const content = media.length

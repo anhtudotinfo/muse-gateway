@@ -22,7 +22,15 @@ const CF_DOWNLOADS: Record<string, string> = {
 };
 
 interface TunnelPersisted {
-  tunnel?: { settingsEnabled?: boolean; tunnelUrl?: string; publicUrl?: string };
+  tunnel?: {
+    settingsEnabled?: boolean;
+    tunnelUrl?: string;
+    publicUrl?: string;
+    /** 'quick' = random trycloudflare URL each run; 'named' = token-managed tunnel with a fixed hostname set in the CF dashboard. */
+    mode?: 'quick' | 'named';
+    /** cloudflared `tunnel run --token` value (named mode only). */
+    token?: string;
+  };
   tailscale?: { settingsEnabled?: boolean; tunnelUrl?: string };
 }
 
@@ -36,6 +44,7 @@ class TunnelManager {
   private persisted: TunnelPersisted = {};
   private dl: DlState = { downloading: false, progress: 0 };
   private enablePromise: Promise<{ tunnelUrl: string; publicUrl: string }> | null = null;
+  private lastRespawnAttempt = 0;
 
   // tunnel.json is the source of truth — re-read on every call so state
   // written by other module realms (Next dev workers) is never stale.
@@ -119,25 +128,74 @@ class TunnelManager {
     res.on('error', reject);
   }
 
-  private spawnCloudflared(): Promise<{ tunnelUrl: string; publicUrl: string }> {
+  /**
+   * Kill stray cloudflared processes belonging to OUR tunnel. Quick tunnels
+   * are matched by the local port in their `--url` arg; named tunnels by
+   * their unique token. Without this, repeated enables (or a second server
+   * process) pile up duplicates whose URLs diverge from persisted state.
+   */
+  private killStrayCloudflared(match?: string): void {
+    if (!IS_WIN) return;
+    try {
+      const pattern = match ?? `localhost:${this.port()}`;
+      const keepPid = this.cfProc?.pid ?? -1;
+      spawnSync('powershell', [
+        '-NoProfile', '-Command',
+        `Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" | Where-Object { $_.ProcessId -ne ${keepPid} -and $_.CommandLine -match '${pattern}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      ], { windowsHide: true, timeout: 15000 });
+    } catch {}
+  }
+
+  private spawnCloudflared(opts: { token?: string; publicUrl?: string } = {}): Promise<{ tunnelUrl: string; publicUrl: string }> {
+    // Reaching spawn means the caller wants a NEW tunnel — kill the current
+    // process first (e.g. switching quick→named leaves the old one running
+    // since keepPid would have spared it), then sweep strays of the same kind.
+    if (this.cfProc) {
+      const proc = this.cfProc;
+      this.cfProc = null;
+      try { proc.kill(); } catch {}
+      if (IS_WIN && proc.pid) {
+        try { spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F']); } catch {}
+      }
+    }
+    this.killStrayCloudflared(opts.token);
+    const named = !!opts.token;
+    const args = named
+      ? ['tunnel', 'run', '--no-autoupdate', '--token', opts.token!]
+      : ['tunnel', '--url', `http://localhost:${this.port()}`, '--no-autoupdate'];
     return new Promise((resolve, reject) => {
-      const proc = spawn(CF_BIN, ['tunnel', '--url', `http://localhost:${this.port()}`, '--no-autoupdate'], {
+      const proc = spawn(CF_BIN, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       this.cfProc = proc;
 
       let settled = false;
       const timer = setTimeout(() => {
-        if (!settled) { settled = true; reject(new Error('cloudflared started but no tunnel URL within 30s')); }
+        if (!settled) { settled = true; reject(new Error('cloudflared started but no tunnel connection within 30s')); }
       }, 30000);
 
       const urlRe = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
       const onData = (buf: Buffer) => {
-        const m = buf.toString().match(urlRe);
-        if (m && !settled) {
+        const s = buf.toString();
+        if (settled) return;
+        if (named) {
+          // Named tunnels don't print a URL — the hostname is configured in
+          // the CF Zero Trust dashboard. "Registered tunnel connection" is
+          // the signal that the tunnel is live.
+          if (!/Registered tunnel connection/i.test(s)) return;
           settled = true;
           clearTimeout(timer);
-          this.persisted.tunnel = { settingsEnabled: true, tunnelUrl: m[0], publicUrl: m[0] };
+          const url = (opts.publicUrl || '').trim().replace(/\/+$/, '');
+          this.persisted.tunnel = { settingsEnabled: true, tunnelUrl: url, publicUrl: url, mode: 'named', token: opts.token };
+          this.save();
+          resolve({ tunnelUrl: url, publicUrl: url });
+          return;
+        }
+        const m = s.match(urlRe);
+        if (m) {
+          settled = true;
+          clearTimeout(timer);
+          this.persisted.tunnel = { settingsEnabled: true, tunnelUrl: m[0], publicUrl: m[0], mode: 'quick' };
           this.save();
           resolve({ tunnelUrl: m[0], publicUrl: m[0] });
         }
@@ -150,22 +208,37 @@ class TunnelManager {
       proc.on('exit', () => {
         this.cfProc = null;
         const p = this.persisted.tunnel;
-        if (p) { p.tunnelUrl = ''; p.publicUrl = ''; }
+        // Quick URLs die with the process — clear them so the UI doesn't
+        // display a dead link. Named URLs are stable across respawns, keep.
+        if (p && p.mode !== 'named') { p.tunnelUrl = ''; p.publicUrl = ''; }
         if (!settled) { settled = true; clearTimeout(timer); reject(new Error('cloudflared exited before producing a URL')); }
       });
     });
   }
 
-  async enableCloudflare(): Promise<{ tunnelUrl: string; publicUrl: string }> {
+  async enableCloudflare(opts: { token?: string; publicUrl?: string } = {}): Promise<{ tunnelUrl: string; publicUrl: string }> {
     this.load();
     if (this.enablePromise) return this.enablePromise;
 
     this.enablePromise = (async () => {
-      if (this.cfProc && this.persisted.tunnel?.tunnelUrl) {
-        return { tunnelUrl: this.persisted.tunnel.tunnelUrl, publicUrl: this.persisted.tunnel.publicUrl || this.persisted.tunnel.tunnelUrl };
+      const token = opts.token?.trim() || this.persisted.tunnel?.token?.trim() || '';
+      const mode = token ? 'named' : 'quick';
+      const cur = this.persisted.tunnel;
+      // Reuse the live process only when it is the same mode (and same token
+      // for named tunnels) — otherwise a stale quick tunnel would be
+      // mistaken for the named one being requested.
+      if (
+        this.cfProc && cur?.tunnelUrl &&
+        (cur.mode ?? 'quick') === mode &&
+        (mode !== 'named' || cur.token === token)
+      ) {
+        return { tunnelUrl: cur.tunnelUrl, publicUrl: cur.publicUrl || cur.tunnelUrl };
       }
       if (!this.cfBinaryExists()) await this.downloadCloudflared();
-      return this.spawnCloudflared();
+      return this.spawnCloudflared({
+        token: mode === 'named' ? token : undefined,
+        publicUrl: opts.publicUrl || cur?.publicUrl,
+      });
     })().finally(() => { this.enablePromise = null; });
 
     return this.enablePromise;
@@ -173,7 +246,7 @@ class TunnelManager {
 
   async disableCloudflare(): Promise<void> {
     this.load();
-    this.persisted.tunnel = { settingsEnabled: false, tunnelUrl: '', publicUrl: '' };
+    this.persisted.tunnel = { settingsEnabled: false, tunnelUrl: '', publicUrl: '', token: '' };
     this.save();
     const proc = this.cfProc;
     this.cfProc = null;
@@ -331,6 +404,18 @@ class TunnelManager {
   getStatus() {
     this.load();
     const cf = this.persisted.tunnel || {};
+    // Watchdog: the user asked for a tunnel (settingsEnabled) but the process
+    // is gone (server restart, cloudflared crash) — respawn it in the
+    // background, at most once per 30s so a persistent failure can't loop.
+    if (cf.settingsEnabled && !this.cfProc && !this.enablePromise && this.cfBinaryExists()) {
+      const now = Date.now();
+      if (now - this.lastRespawnAttempt > 30_000) {
+        this.lastRespawnAttempt = now;
+        void this.enableCloudflare().catch((err) => {
+          console.error('[tunnel] watchdog respawn failed:', err?.message || err);
+        });
+      }
+    }
     const ts = this.persisted.tailscale || {};
     return {
       tunnel: {

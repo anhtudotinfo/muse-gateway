@@ -45,6 +45,9 @@ export interface ChatCompletionRequest {
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  /** Open a fresh Muse chat before sending — isolates a new scenario/script
+   *  from the previous conversation's context. */
+  new_chat?: boolean;
 }
 
 export interface OpenAIModel {

@@ -85,6 +85,10 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   const [tunnelStatus, setTunnelStatus] = useState<StatusAlertStatus | null>(null);
   const [showEnableTunnelModal, setShowEnableTunnelModal] = useState(false);
   const [showDisableTunnelModal, setShowDisableTunnelModal] = useState(false);
+  // Named tunnel (fixed hostname): token from Cloudflare Zero Trust +
+  // the public hostname configured there. Empty token = quick tunnel.
+  const [namedToken, setNamedToken] = useState('');
+  const [namedPublicUrl, setNamedPublicUrl] = useState('');
 
   // Tailscale state
   const [tsEnabled, setTsEnabled] = useState(false);
@@ -413,7 +417,14 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     pollProgress();
 
     try {
-      const res = await fetch('/api/tunnel/enable', { method: 'POST' });
+      const token = namedToken.trim();
+      const res = await fetch('/api/tunnel/enable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          token ? { token, publicUrl: namedPublicUrl.trim() } : {}
+        ),
+      });
       polling = false;
       const data = await safeJson(res);
       if (!res.ok) {
@@ -1305,9 +1316,39 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
             Requires outbound port 7844 (TCP/UDP). Connection may take 10-30s.
           </p>
 
+          {/* Named tunnel — fixed domain. Paste a tunnel token from
+              Cloudflare Zero Trust → Networks → Tunnels (hostname →
+              http://localhost:<port>). Empty token = random quick URL. */}
+          <div className="border border-border-subtle rounded-lg p-3 flex flex-col gap-3">
+            <p className="text-xs font-semibold text-text-main">
+              Fixed domain (named tunnel) — optional
+            </p>
+            <Input
+              label="Tunnel token"
+              value={namedToken}
+              onChange={(e) => setNamedToken(e.target.value)}
+              placeholder="eyJhIjoi…"
+              hint="Zero Trust → Networks → Tunnels → your tunnel → Install connector → token."
+            />
+            {namedToken.trim() ? (
+              <Input
+                label="Public URL"
+                value={namedPublicUrl}
+                onChange={(e) => setNamedPublicUrl(e.target.value)}
+                placeholder="https://muse.yourdomain.com"
+                hint="The public hostname you pointed at http://localhost:3000 in the tunnel's Public Hostname tab."
+              />
+            ) : null}
+            {namedToken.trim() && !namedPublicUrl.trim() ? (
+              <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                Without the public URL, the dashboard can't display or verify the endpoint — paste the hostname you configured.
+              </p>
+            ) : null}
+          </div>
+
           <div className="flex gap-2">
             <Button onClick={handleEnableTunnel} fullWidth>
-              Start Tunnel
+              {namedToken.trim() ? 'Start Named Tunnel' : 'Start Tunnel'}
             </Button>
             <Button onClick={() => setShowEnableTunnelModal(false)} variant="ghost" fullWidth>Cancel</Button>
           </div>

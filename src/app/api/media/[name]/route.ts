@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-
-// Serves media files persisted by museDriver's blob-resolver (data/media/).
-const MEDIA_DIR = path.join(process.cwd(), 'data', 'media');
+import { MEDIA_DIR, markMediaServed } from '@/lib/mediaStore';
 
 const MIME: Record<string, string> = {
   '.mp4': 'video/mp4',
@@ -39,6 +37,7 @@ export async function GET(
   }
 
   const stat = fs.statSync(file);
+  markMediaServed(safe);
   const type = MIME[path.extname(safe).toLowerCase()] || 'application/octet-stream';
   const base = {
     ...CORS,

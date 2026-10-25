@@ -4,6 +4,7 @@ import path from 'path';
 import { getBrowserExecutable, getSavedSessions, parseCookieString, formatCookiesForPuppeteer } from './museService';
 import { parseCommandRequests, isCommandAllowed, runLocalCommand } from './toolBridge';
 import './logBuffer';
+import { MEDIA_DIR, persistMediaFile } from './mediaStore';
 import type { OpenAIModel, Profile } from '@/types';
 
 export interface ChatOptions {
@@ -22,6 +23,9 @@ export interface ChatOptions {
    *  frame-bridging — the previous scene's last frame becomes this one's
    *  starting frame for seamless cuts. */
   images?: string[];
+  /** Start a brand-new Muse chat before sending — used for the first shot
+   *  of a new scenario so prior threads don't bleed context in. */
+  newChat?: boolean | null;
 }
 
 /** A media element found in a Muse reply — may be a blob: URL (page-local). */
@@ -35,8 +39,6 @@ export interface ChatResult {
   text: string;
   media: string[];
 }
-
-const MEDIA_DIR = path.join(process.cwd(), 'data', 'media');
 
 // Max command-execution rounds per user prompt before giving the reply back.
 const MAX_CMD_ROUNDS = 5;
@@ -134,7 +136,7 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null }: ChatOptions): Promise<ChatResult> {
     const session = this.resolveSession(sessionId);
 
     // Serialize per account — different accounts run in parallel. Requests
@@ -159,6 +161,7 @@ class MuseDriverService {
 
     try {
       const page = await this.getPageForSession(session);
+      if (newChat) await this.openNewChat(page);
       const textarea = await page.waitForSelector('textarea', { timeout: 20000 });
       if (!textarea) throw new Error('Không tìm thấy khung chat trên Muse.');
 
@@ -229,6 +232,74 @@ class MuseDriverService {
       return 'ok';
     } catch {
       return 'error';
+    }
+  }
+
+  /** Open a fresh chat thread on the account's page. Heuristic — muse.ai
+   *  has no stable "new chat" selector, so try (1) a control labelled
+   *  "New chat"/"Chat mới", (2) a "+" affordance sitting next to the
+   *  chats/sidebar section header, (3) reload the app root. Best-effort:
+   *  worst case we stay on the current thread rather than failing. */
+  private async openNewChat(page: Page): Promise<void> {
+    try {
+      const strategy: string | null = await page.evaluate(() => {
+        const clickables = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            'button, a, [role="button"], [role="link"], li > *'
+          )
+        );
+        // 1) Explicit "New chat" label — most reliable when present.
+        const labelled = clickables.find((el) =>
+          /new\s*chat|chat\s*mới|cuộc\s*trò\s*chuyện\s*mới/i.test(
+            (el.getAttribute('aria-label') || '') +
+              ' ' +
+              (el.title || '') +
+              ' ' +
+              (el.textContent || '')
+          )
+        );
+        if (labelled) {
+          labelled.click();
+          return 'label';
+        }
+        // 2) "+" affordance near a sidebar section that holds chats —
+        //    look for a header mentioning chats/history then its "+".
+        const headers = Array.from(
+          document.querySelectorAll<HTMLElement>('aside *, nav *, [class*="sidebar"] *')
+        );
+        const chatHeader = headers.find((el) =>
+          /side\s*chats|chats|lịch\s*sử|history|đoạn\s*chat/i.test(
+            (el.textContent || '').trim()
+          ) && (el.textContent || '').trim().length < 40
+        );
+        if (chatHeader) {
+          const scope = chatHeader.parentElement || chatHeader;
+          const plus = scope.querySelector<HTMLElement>(
+            'button, [role="button"], svg, a'
+          );
+          const plusBtn =
+            plus &&
+            ((plus.textContent || '').trim() === '+' ||
+              /add|new|plus/i.test(plus.getAttribute('aria-label') || ''));
+          if (plus && plusBtn) {
+            plus.click();
+            return 'sidebar-plus';
+          }
+        }
+        return null;
+      });
+      if (!strategy) {
+        // 3) Reload the app root — lands on the default/new composer.
+        await page.goto(new URL(page.url()).origin + '/', {
+          waitUntil: 'domcontentloaded',
+        });
+      }
+      await page.waitForSelector('textarea', { timeout: 15000 });
+      // Let the new thread mount before we paste into it.
+      await new Promise((r) => setTimeout(r, 800));
+      console.log(`[MuseDriver] new chat opened via ${strategy ?? 'reload'}`);
+    } catch (e) {
+      console.log('[MuseDriver] openNewChat failed — staying on current thread:', e);
     }
   }
 
@@ -835,9 +906,9 @@ class MuseDriverService {
       .slice(0, 60);
     const fname = `${base}-${Date.now().toString(36)}${ext}`;
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
-    fs.writeFileSync(path.join(MEDIA_DIR, fname), Buffer.from(data.b64, 'base64'));
+    const url = persistMediaFile(fname, Buffer.from(data.b64, 'base64'));
     console.log('[MuseDriver] saved media:', fname, `(${(data.b64.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
-    return `/api/media/${fname}`;
+    return url;
   }
 
   async close(): Promise<void> {
