@@ -138,7 +138,7 @@ export function checkKey(key: string): KeyCheck {
   if (parts.length !== 3 || parts[0] !== KEY_PREFIX) {
     return fail('Format key không hợp lệ (kỳ vọng MUSE1.<payload>.<sig>)');
   }
-  let p: { e?: string; x?: number; h?: string };
+  let p: { e?: string; x?: number; h?: string; p?: string };
   try {
     p = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
   } catch {
