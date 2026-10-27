@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
 import { musePool } from '@/lib/musePool';
 import { apiKeyService } from '@/lib/apiKeys';
+import { licenseGate } from '@/lib/licenseGate';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,6 +15,8 @@ export async function OPTIONS() {
 }
 
 export async function GET(req: Request) {
+  const gate = licenseGate(corsHeaders);
+  if (gate) return gate;
   // Expose combos as selectable model names (9router-style)
   const comboModels = musePool.getCombos().map((c) => ({
     id: c.name,

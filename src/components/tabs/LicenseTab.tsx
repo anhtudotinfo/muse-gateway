@@ -61,13 +61,6 @@ export function LicenseTab() {
   const [verifying, setVerifying] = useState(false);
   const [formKey, setFormKey] = useState('');
   const [saving, setSaving] = useState(false);
-  // Key generator (vendor tools — mint keys for this/other machines)
-  const [genOpen, setGenOpen] = useState(false);
-  const [genEmail, setGenEmail] = useState('');
-  const [genDays, setGenDays] = useState('365');
-  const [genBind, setGenBind] = useState(true);
-  const [genKey, setGenKey] = useState('');
-  const [generating, setGenerating] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -121,29 +114,6 @@ export function LicenseTab() {
     }
   };
 
-  const generate = async () => {
-    if (!genEmail.trim()) {
-      showToast('Nhập email đăng ký để cấp key', 'error');
-      return;
-    }
-    setGenerating(true);
-    try {
-      const res = await fetch('/api/license', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'generate', email: genEmail, days: Number(genDays) || 0, bindHwid: genBind }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || res.statusText);
-      setGenKey(j.key);
-      showToast('Đã tạo license key', 'success');
-    } catch (e: any) {
-      showToast('Lỗi tạo key: ' + (e?.message || e), 'error');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
   const remove = async () => {
     if (!confirm('Gỡ license khỏi máy này?')) return;
     await fetch('/api/license', { method: 'DELETE' });
@@ -170,7 +140,7 @@ export function LicenseTab() {
           <div>
             <div className="ov-card-title">Thông tin bản quyền</div>
             <div className="ov-card-desc">
-              License key chứa email + hạn + khóa HWID, ký HMAC-SHA256 — verify kiểm tra chữ ký thật, key sửa/giả sẽ bị từ chối.
+              License key chứa email + hạn + khóa HWID, ký Ed25519 — verify kiểm tra chữ ký thật, key sửa/giả sẽ bị từ chối.
             </div>
           </div>
           {badge && (
@@ -249,68 +219,6 @@ export function LicenseTab() {
             </button>
           </div>
         )}
-
-        {/* Key generator — vendor tool */}
-        <div style={{ marginTop: 14 }}>
-          <button type="button" className="apple-tool-btn" onClick={() => setGenOpen((v) => !v)}>
-            {genOpen ? '▾ Ẩn tạo key' : '▸ Tạo license key mới'}
-          </button>
-          {genOpen && (
-            <div
-              style={{
-                marginTop: 10,
-                padding: 14,
-                borderRadius: 10,
-                border: '1px solid var(--apple-border-light)',
-                background: 'var(--apple-surface)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-              }}
-            >
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px auto auto', gap: 10, alignItems: 'center' }}>
-                <input
-                  style={inputStyle}
-                  placeholder="Email đăng ký"
-                  value={genEmail}
-                  onChange={(e) => setGenEmail(e.target.value)}
-                />
-                <input
-                  style={inputStyle}
-                  type="number"
-                  min={0}
-                  placeholder="Số ngày"
-                  title="Số ngày hiệu lực — 0 = vĩnh viễn"
-                  value={genDays}
-                  onChange={(e) => setGenDays(e.target.value)}
-                />
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                  <input type="checkbox" checked={genBind} onChange={(e) => setGenBind(e.target.checked)} style={{ accentColor: 'var(--color-primary, #6c5ce7)' }} />
-                  Khóa HWID máy này
-                </label>
-                <button type="button" className="btn-apple-secondary" onClick={generate} disabled={generating}>
-                  {generating ? 'Đang tạo…' : 'Tạo key'}
-                </button>
-              </div>
-              {genKey && (
-                <div style={{ ...fieldBox, fontSize: 12, wordBreak: 'break-all', whiteSpace: 'normal', alignItems: 'flex-start' }}>
-                  <span style={{ overflowWrap: 'anywhere' }}>{genKey}</span>
-                  <button
-                    type="button"
-                    className="apple-tool-btn"
-                    style={{ padding: '2px 8px', fontSize: 11, flexShrink: 0 }}
-                    onClick={() => copyText(genKey, 'license key')}
-                  >
-                    Sao chép
-                  </button>
-                </div>
-              )}
-              <div style={{ fontSize: 11, color: 'var(--text-quaternary)' }}>
-                Hoặc CLI: <code>node scripts/gen-license.mjs --email … --days N --hwid HWID</code>
-              </div>
-            </div>
-          )}
-        </div>
 
         <div style={{ marginTop: 14, fontSize: 12, color: 'var(--text-tertiary)' }}>
           Lần verify gần nhất:{' '}

@@ -1,6 +1,13 @@
-node_modules/
+﻿node_modules/
 .next/
 .browser-profile/
 .DS_Store
 *.log
 target/
+data/
+dist/
+
+license-server/db.json
+license-server/*.tmp
+
+license-server/.*

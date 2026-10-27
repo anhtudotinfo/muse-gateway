@@ -4,9 +4,10 @@ import os from 'os';
 import https from 'https';
 import puppeteer from 'puppeteer-core';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
+import { dataDir } from './dataDir';
 import type { CookieMap, Profile, SessionTestResult, BrowserDetection } from '@/types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const USER_DATA_DIR = path.join(os.tmpdir(), 'muse-browser-profile');
 
@@ -249,7 +250,7 @@ export function getSavedSessions(): Profile[] {
   return readJsonFile<Profile[]>(SESSIONS_FILE, [], Array.isArray);
 }
 
-export function saveSessionProfile({ id, name, cookies }: { id?: string; name: string; cookies: string }): Profile {
+export function saveSessionProfile({ id, name, cookies, proxy }: { id?: string; name: string; cookies: string; proxy?: string | null }): Profile {
   ensureDataDir();
   const sessions = getSavedSessions();
   const sessionId = id || 'session_' + Date.now();
@@ -265,6 +266,8 @@ export function saveSessionProfile({ id, name, cookies }: { id?: string; name: s
     createdAt: existingIdx >= 0 ? sessions[existingIdx].createdAt : now,
     lastTested: existingIdx >= 0 ? sessions[existingIdx].lastTested ?? null : null,
     lastStatus: existingIdx >= 0 ? sessions[existingIdx].lastStatus ?? null : null,
+    // proxy === undefined → keep the existing value; null clears it.
+    proxy: proxy !== undefined ? proxy : (existingIdx >= 0 ? sessions[existingIdx].proxy ?? null : null),
   };
 
   if (existingIdx >= 0) {
@@ -275,6 +278,38 @@ export function saveSessionProfile({ id, name, cookies }: { id?: string; name: s
 
   writeJsonAtomic(SESSIONS_FILE, sessions);
   return sessionObj;
+}
+
+/** Normalize + validate a proxy URL. Returns the canonical URL or throws.
+ *  Accepts "http://host:port", "socks5://user:pass@host:1080", or bare
+ *  "host:port" (treated as http). */
+export function normalizeProxy(raw: string | null | undefined): string | null {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `http://${s}`;
+  let u: URL;
+  try {
+    u = new URL(withScheme);
+  } catch {
+    throw new Error(`Proxy không hợp lệ: "${s}" — dạng đúng: http://[user:pass@]host:port hoặc socks5://host:port`);
+  }
+  if (!['http:', 'https:', 'socks4:', 'socks5:'].includes(u.protocol)) {
+    throw new Error(`Proxy scheme "${u.protocol}" không hỗ trợ — dùng http, https, socks4 hoặc socks5`);
+  }
+  if (!u.hostname) throw new Error(`Proxy thiếu host: "${s}"`);
+  return u.toString();
+}
+
+/** Set/clear the egress proxy on a saved session. */
+export function updateSessionProxy(id: string, proxy: string | null): Profile | null {
+  ensureDataDir();
+  const sessions = getSavedSessions();
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return null;
+  s.proxy = proxy;
+  s.updatedAt = new Date().toISOString();
+  writeJsonAtomic(SESSIONS_FILE, sessions);
+  return s;
 }
 
 /** Persist a liveness-check outcome onto a saved session. */
@@ -310,6 +345,178 @@ export function deleteSessionProfile(id: string): boolean {
   sessions = sessions.filter(s => s.id !== id);
   writeJsonAtomic(SESSIONS_FILE, sessions);
   return true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Login capture — open a real browser, let the user sign in to Muse   */
+/* themselves, then harvest the resulting cookies into a saved session. */
+/* ------------------------------------------------------------------ */
+
+export interface LoginCaptureJob {
+  id: string;
+  status: 'waiting' | 'captured' | 'error' | 'closed';
+  error?: string;
+  browserType: string;
+  /** Set once the session lands in the store. */
+  sessionId?: string;
+  deduped?: boolean;
+  /** Re-login mode — captured cookies overwrite this existing session. */
+  targetSessionId?: string;
+  startedAt: number;
+}
+
+const loginJobs = new Map<string, LoginCaptureJob>();
+const LOGIN_CAPTURE_TIMEOUT_MS = 5 * 60 * 1000;
+const LOGIN_URL = 'https://muse.ai/';
+/** Separate profile from USER_DATA_DIR — the session-verify browser may
+ * still be open with that profile and Chrome refuses to launch twice on
+ * the same userDataDir. */
+const LOGIN_USER_DATA_DIR = path.join(os.tmpdir(), 'muse-login-profile');
+
+export function getLoginCaptureJob(id: string): LoginCaptureJob | null {
+  return loginJobs.get(id) ?? null;
+}
+
+export function cancelLoginCapture(id: string): boolean {
+  const job = loginJobs.get(id);
+  if (!job || job.status !== 'waiting') return false;
+  job.status = 'closed';
+  return true;
+}
+
+/** Drop jobs older than their timeout so the map doesn't leak. */
+function pruneLoginJobs(): void {
+  const cutoff = Date.now() - LOGIN_CAPTURE_TIMEOUT_MS * 2;
+  for (const [id, job] of loginJobs) {
+    if (job.startedAt < cutoff && job.status !== 'waiting') {
+      loginJobs.delete(id);
+    }
+  }
+}
+
+/** Puppeteer cookie jar → the `name=value; …` string the session store eats. */
+function cookiesToHeader(cookies: { name: string; value: string }[]): string {
+  return cookies
+    .filter((c) => c.name && c.value)
+    .map((c) => `${c.name}=${c.value}`)
+    .join('; ');
+}
+
+/** Start the capture job — returns immediately; the browser keeps polling
+ * in the background until hatch_sess appears, the user closes it, or the
+ * 5-minute timeout hits. `targetSessionId` re-logins an existing account:
+ * captured cookies overwrite that card directly (hatch_sess rotates on
+ * re-login, so dedupe-by-cookie would create a duplicate card). */
+export async function startLoginCapture(browserType: string = 'chrome', targetSessionId?: string | null): Promise<LoginCaptureJob> {
+  const browserInfo = getBrowserExecutable(browserType);
+  if (!browserInfo) {
+    throw new Error('Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy tính của bạn.');
+  }
+  pruneLoginJobs();
+  const job: LoginCaptureJob = {
+    id: `login_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    status: 'waiting',
+    browserType: browserInfo.type,
+    startedAt: Date.now(),
+    targetSessionId: targetSessionId || undefined,
+  };
+  loginJobs.set(job.id, job);
+  void runLoginCapture(job, browserInfo);
+  return job;
+}
+
+async function runLoginCapture(
+  job: LoginCaptureJob,
+  browserInfo: BrowserExecutableInfo,
+): Promise<void> {
+  let browser: import('puppeteer-core').Browser | null = null;
+  try {
+    browser = await puppeteer.launch({
+      executablePath: browserInfo.path,
+      headless: false,
+      defaultViewport: null,
+      userDataDir: LOGIN_USER_DATA_DIR,
+      args: [
+        '--start-maximized',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-infobars',
+        '--window-name=Muse_Login_Capture',
+      ],
+      ignoreDefaultArgs: ['--enable-automation'],
+    });
+  } catch (err: any) {
+    job.status = 'error';
+    job.error = 'Không mở được trình duyệt: ' + (err?.message || String(err));
+    return;
+  }
+
+  try {
+    const pages = await browser.pages();
+    const page = pages.length > 0 ? pages[0] : await browser.newPage();
+    try {
+      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch {
+      // Navigation may stall on slow networks — the poll loop below still
+      // reads cookies, so a half-loaded login page is workable.
+    }
+
+    const deadline = Date.now() + LOGIN_CAPTURE_TIMEOUT_MS;
+    while (job.status === 'waiting' && Date.now() < deadline) {
+      if (!browser.connected) {
+        job.status = 'closed';
+        break;
+      }
+      try {
+        // Browser-level jar — catches hatch_sess whichever muse.ai
+        // subdomain the login flow bounced through.
+        const cookies = await browser.cookies();
+        const hasSession = cookies.some((c) => c.name === 'hatch_sess' && !!c.value);
+        if (hasSession) {
+          const cookieHeader = cookiesToHeader(cookies);
+          let session: Profile;
+          if (job.targetSessionId) {
+            // Re-login — write straight onto the target card.
+            const target = getSavedSessions().find((s) => s.id === job.targetSessionId);
+            session = target
+              ? saveSessionProfile({ id: target.id, name: target.name, cookies: cookieHeader })
+              : saveSessionProfile({ name: `Tài khoản ${getSavedSessions().length + 1}`, cookies: cookieHeader });
+            job.deduped = !!target;
+          } else {
+            // Same dedupe rule as manual paste — re-login refreshes the
+            // existing card instead of stacking a duplicate.
+            const existing = findSessionByCookies(cookieHeader);
+            session = existing
+              ? saveSessionProfile({ id: existing.id, name: existing.name, cookies: cookieHeader })
+              : saveSessionProfile({
+                  name: `Tài khoản ${getSavedSessions().length + 1}`,
+                  cookies: cookieHeader,
+                });
+            job.deduped = !!existing;
+          }
+          job.status = 'captured';
+          job.sessionId = session.id;
+          break;
+        }
+      } catch {
+        // Page is mid-navigation — cookies() rejects briefly; retry.
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    if (job.status === 'waiting') {
+      job.status = 'error';
+      job.error = 'Hết 5 phút chờ đăng nhập — trình duyệt đã đóng.';
+    }
+    if (job.status === 'closed' && browser.connected) {
+      // User pressed cancel while the window was still open.
+      job.error = undefined;
+    }
+  } finally {
+    try {
+      if (browser.connected) await browser.close();
+    } catch { /* window may already be gone */ }
+  }
 }
 
 export function generateBookmarklet(cookies: string): { bookmarkletUrl: string; consoleScript: string } {

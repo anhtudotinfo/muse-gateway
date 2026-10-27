@@ -5,6 +5,7 @@ import { getBrowserExecutable, getSavedSessions, parseCookieString, formatCookie
 import { parseCommandRequests, isCommandAllowed, runLocalCommand } from './toolBridge';
 import './logBuffer';
 import { MEDIA_DIR, persistMediaFile } from './mediaStore';
+import { dataPath } from './dataDir';
 import type { OpenAIModel, Profile } from '@/types';
 
 export interface ChatOptions {
@@ -26,6 +27,14 @@ export interface ChatOptions {
   /** Start a brand-new Muse chat before sending — used for the first shot
    *  of a new scenario so prior threads don't bleed context in. */
   newChat?: boolean | null;
+  /** Muse thread to continue — id or full https://muse.ai/thread/<id> URL.
+   *  The driver navigates the page to that thread before composing so a
+   *  follow-up task lands in the same conversation instead of Main chat. */
+  thread?: string | null;
+  /** Pin the request to one saved account profile (sessions.json id).
+   *  Thread continuation only works on the account that owns the thread,
+   *  so the pool must not fall over to a different account. */
+  pinAccount?: string | null;
 }
 
 /** A media element found in a Muse reply — may be a blob: URL (page-local). */
@@ -38,19 +47,44 @@ interface MediaItem {
 export interface ChatResult {
   text: string;
   media: string[];
+  /** The Muse thread the reply landed in — page URL captured after send.
+   *  Needed so follow-up tasks can return to the same conversation. */
+  threadUrl?: string | null;
+  /** Which saved-session account served the request (sessions.json id). */
+  accountId?: string | null;
 }
 
 // Max command-execution rounds per user prompt before giving the reply back.
 const MAX_CMD_ROUNDS = 5;
 
+/** Does this reply read like a blocking clarifying question rather than a
+ *  finished answer? Matched on Vietnamese + English ask-for-confirmation
+ *  phrasing; callers must also check the reply carries no media (a done
+ *  generation's "want edits?" follow-up would false-positive otherwise). */
+function looksLikeClarification(text: string): boolean {
+  if (!text || text.length > 6000) return false;
+  const t = text.toLowerCase();
+  const hasQuestion = t.includes('?') || /lựa chọn|phương án|bên dưới/i.test(t);
+  if (!hasQuestion) return false;
+  return /xác nhận|không lấy nhầm|bạn muốn|bạn cần|chọn (người|phương án|một)|hai gương mặt|khác nhau|nào\b|which (one|face|person|option)|clarif|confirm|hãy chọn|trước khi/i.test(
+    t
+  );
+}
+
 interface AccountSlot {
   context: BrowserContext;
   page: Page;
   cookiesRaw: string;
+  /** Normalized proxy URL this slot's browser was launched with — a proxy
+   *  change on the profile must force a fresh context in the right browser. */
+  proxy: string;
 }
 
 class MuseDriverService {
-  private browser: Browser | null = null;
+  // One headless browser per egress proxy — Chrome applies --proxy-server
+  // process-wide, so accounts on different proxies can't share a browser.
+  // Key '' = direct connection.
+  private browsers: Map<string, Browser> = new Map();
   private slots: Map<string, AccountSlot> = new Map();
   private busy: Set<string> = new Set();
   private waiting: Set<string> = new Set();
@@ -65,36 +99,56 @@ class MuseDriverService {
     }, 15 * 60 * 1000);
   }
 
-  private async ensureBrowser(): Promise<Browser> {
-    if (this.browser) return this.browser;
+  /** Strip credentials from a proxy URL — Chrome's --proxy-server takes
+   *  host:port only; auth goes through page.authenticate. */
+  private proxyKey(session: Profile): string {
+    const raw = (session.proxy || '').trim();
+    if (!raw) return '';
+    try {
+      const u = new URL(raw);
+      return `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}`;
+    } catch {
+      return raw;
+    }
+  }
+
+  private async ensureBrowser(proxyKey: string): Promise<Browser> {
+    const existing = this.browsers.get(proxyKey);
+    if (existing?.connected) return existing;
 
     const browserInfo = getBrowserExecutable('chrome');
     if (!browserInfo) {
       throw new Error('Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy chủ.');
     }
 
-    this.browser = await puppeteer.launch({
+    const args = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1280,800',
+    ];
+    if (proxyKey) args.push(`--proxy-server=${proxyKey}`);
+
+    const browser = await puppeteer.launch({
       executablePath: browserInfo.path,
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--window-size=1280,800',
-      ],
+      args,
     });
-    return this.browser;
+    this.browsers.set(proxyKey, browser);
+    return browser;
   }
 
   // One incognito context per account — cookies are isolated, so every saved
-  // profile becomes an independent Muse session inside a single browser.
+  // profile becomes an independent Muse session inside its proxy's browser.
   async getPageForSession(session: Profile): Promise<Page> {
     this.resetIdleTimer();
+    const proxy = this.proxyKey(session);
     const existing = this.slots.get(session.id);
     if (
       existing &&
       existing.cookiesRaw === session.cookies &&
+      existing.proxy === proxy &&
       !existing.page.isClosed()
     ) {
       return existing.page;
@@ -105,10 +159,25 @@ class MuseDriverService {
       this.slots.delete(session.id);
     }
 
-    const browser = await this.ensureBrowser();
+    const browser = await this.ensureBrowser(proxy);
     const context = await browser.createBrowserContext();
     const page = await context.newPage();
     await page.setViewport({ width: 1280, height: 800 });
+
+    // Authenticated proxy — credentials live in the URL, Chrome prompts per
+    // page; answer them once at page level.
+    try {
+      const u = session.proxy ? new URL(session.proxy) : null;
+      if (u?.username) {
+        await page.authenticate({
+          username: decodeURIComponent(u.username),
+          password: decodeURIComponent(u.password || ''),
+        });
+      }
+    } catch {}
+
+    const cookiesToSet = parseCookieString(session.cookies);
+    await page.setCookie(...formatCookiesForPuppeteer(cookiesToSet));
 
     const map = parseCookieString(session.cookies);
     await page.setCookie(...formatCookiesForPuppeteer(map));
@@ -122,7 +191,7 @@ class MuseDriverService {
     // "Delivery not confirmed" and no reply is ever generated.
     await new Promise((r) => setTimeout(r, 3500));
 
-    this.slots.set(session.id, { context, page, cookiesRaw: session.cookies });
+    this.slots.set(session.id, { context, page, cookiesRaw: session.cookies, proxy });
     return page;
   }
 
@@ -136,7 +205,7 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null }: ChatOptions): Promise<ChatResult> {
     const session = this.resolveSession(sessionId);
 
     // Serialize per account — different accounts run in parallel. Requests
@@ -161,7 +230,11 @@ class MuseDriverService {
 
     try {
       const page = await this.getPageForSession(session);
-      if (newChat) await this.openNewChat(page);
+      // Thread continuation wins over newChat — a task that must land in an
+      // existing conversation is navigated there explicitly; newChat only
+      // applies when there is no thread to return to.
+      if (thread) await this.openThread(page, thread);
+      else if (newChat) await this.openNewChat(page);
       const textarea = await page.waitForSelector('textarea', { timeout: 20000 });
       if (!textarea) throw new Error('Không tìm thấy khung chat trên Muse.');
 
@@ -172,6 +245,16 @@ class MuseDriverService {
       // execute them here and paste [COMMAND OUTPUT] back into the thread.
       let lastReply = '';
       let lastMedia: string[] = [];
+      const makeResult = (): ChatResult => ({
+        text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.',
+        media: lastMedia,
+        // The URL Muse is on after the reply — /thread/new redirects to the
+        // real /thread/<id> once the first message posts, so this is the
+        // reliable way to learn which conversation a task landed in.
+        threadUrl: /\/thread\/[^/?#]+/.test(page.url()) ? page.url() : null,
+        accountId: session.id,
+      });
+      let clarified = false;
       for (let round = 0; round <= MAX_CMD_ROUNDS; round++) {
         // Buffer this round's stream deltas; only flush to the caller when the
         // round turns out to be the final answer (no command request inside).
@@ -186,8 +269,28 @@ class MuseDriverService {
         if (result.media.length) lastMedia = result.media;
         const cmds = parseCommandRequests(result.text).filter(isCommandAllowed);
         if (!cmds.length || round === MAX_CMD_ROUNDS) {
+          // Clarification stall — Muse sometimes stops to ask "which of these
+          // faces / confirm the choice" with option buttons instead of
+          // generating, and the task then waits for media that never comes.
+          // Only when the reply is media-LESS (a finished generation with a
+          // "want edits?" follow-up carries media and must not trigger this)
+          // and reads like a blocking question do we answer once: pick the
+          // most reasonable option per the refs' described roles, don't ask
+          // again, generate now. A second clarification falls through to
+          // return so the task surfaces Muse's actual question as the error.
+          if (
+            !clarified &&
+            !result.media.length &&
+            looksLikeClarification(result.text)
+          ) {
+            clarified = true;
+            console.log('[MuseDriver] clarification detected — auto-answering');
+            toSend =
+              'Không cần xác nhận thêm — tự chọn phương án hợp lý nhất theo đúng vai trò từng file đính kèm trong yêu cầu ban đầu (khung hình = bối cảnh/tư thế, ảnh chân dung = nhân vật chính phải giống hệt, ảnh trang phục = chỉ lấy đồ). Không hỏi lại — TẠO NGAY media.';
+            continue;
+          }
           if (buffered && onChunk) onChunk(buffered);
-          return { text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.', media: lastMedia };
+          return makeResult();
         }
 
         for (const c of cmds) console.log('[MuseDriver] Muse requested command:', c);
@@ -199,7 +302,7 @@ class MuseDriverService {
           results.join('\n\n').slice(0, 24000) +
           `\n[/COMMAND OUTPUT]`;
       }
-      return { text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.', media: lastMedia };
+      return makeResult();
     } catch (err) {
       console.error('[MuseDriver] Chat error:', err);
       await this.dropSlot(session.id);
@@ -235,22 +338,148 @@ class MuseDriverService {
     }
   }
 
+  /** Navigate the page to an existing Muse thread (continuation). Accepts
+   *  a thread id or full URL. Threads live under the account that created
+   *  them — if Muse redirects away (home/Main chat) the thread does not
+   *  belong to this account, and sending anyway would silently dump the
+   *  prompt into Main chat, so that's a hard failure. */
+  private async openThread(page: Page, thread: string): Promise<void> {
+    const m = thread.match(/\/thread\/([^/?#]+)/) || thread.match(/^([A-Za-z0-9_-]{6,})$/);
+    if (!m) throw new Error(`Thread không hợp lệ: "${thread}"`);
+    const id = m[1];
+    const url = `https://muse.ai/thread/${id}`;
+    if (!page.url().includes(`/thread/${id}`)) {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.waitForSelector('textarea', { timeout: 15000 });
+      await new Promise((r) => setTimeout(r, 800));
+      if (!page.url().includes(`/thread/${id}`)) {
+        throw new Error(
+          `Thread ${id} không mở được — Muse đã redirect (về ${page.url()}). Thread chỉ tồn tại trên đúng tài khoản đã tạo nó.`
+        );
+      }
+      console.log(`[MuseDriver] continued thread ${id}`);
+    }
+  }
+
   /** Open a fresh chat thread on the account's page. Heuristic — muse.ai
    *  has no stable "new chat" selector, so try (1) a control labelled
    *  "New chat"/"Chat mới", (2) a "+" affordance sitting next to the
    *  chats/sidebar section header, (3) reload the app root. Best-effort:
    *  worst case we stay on the current thread rather than failing. */
   private async openNewChat(page: Page): Promise<void> {
-    try {
-      const strategy: string | null = await page.evaluate(() => {
+    // Muse's "+" button navigates to /thread/new — direct navigation beats
+    // DOM scraping entirely (sidebar/popover state differs across layouts,
+    // viewports and accounts; the URL does not).
+    if (!page.url().startsWith('https://muse.ai/thread/new')) {
+      try {
+        await page.goto('https://muse.ai/thread/new', {
+          waitUntil: 'domcontentloaded',
+          timeout: 20000,
+        });
+        await page.waitForSelector('textarea', { timeout: 15000 });
+        // Let the composer settle — same settle as a manual "+" click.
+        await new Promise((r) => setTimeout(r, 800));
+        console.log('[MuseDriver] new chat opened via /thread/new');
+        return;
+      } catch (e) {
+        console.log(
+          '[MuseDriver] /thread/new navigation failed — falling back to UI click:',
+          e
+        );
+      }
+    } else {
+      // Already on a fresh, empty composer — nothing to isolate.
+      return;
+    }
+
+    // Snapshot "where we are" — a real switch must change at least one of
+    // these signals (active row title / row count / url / empty composer).
+    const prev = await page
+      .evaluate(() => {
+        const cur = document.querySelector<HTMLElement>('[aria-current="page"]');
+        return {
+          title: cur ? (cur.textContent || '').trim() : '',
+          rows: document.querySelectorAll(
+            '[data-testid="hatch-thread-row"]'
+          ).length,
+          bubbles: document.querySelectorAll('[class*="group/msg"]').length,
+          url: location.href,
+        };
+      })
+      .catch(() => ({ title: '', rows: 0, bubbles: 0, url: '' }));
+
+    // Right after page load the sidebar mounts late — a click fired before
+    // React hydration is silently swallowed. Wait for the button first.
+    // In the headless layout the chats list lives behind the "Chats"
+    // switcher popover (hatch-chat-switcher-trigger) — open it so the "+"
+    // (hatch-chat-compose) mounts, then fall back to any rail toggle.
+    await page
+      .waitForSelector('[data-testid="hatch-chat-compose"]', { timeout: 6000 })
+      .catch(async () => {
+        await page
+          .click('[data-testid="hatch-chat-switcher-trigger"]')
+          .catch(() =>
+            page.evaluate(() => {
+              const el = document.querySelector<HTMLElement>(
+                '[data-testid="hatch-chat-switcher-trigger"]'
+              );
+              el?.click();
+            })
+          )
+          .catch(() => {});
+        await new Promise((r) => setTimeout(r, 800));
+        await page
+          .waitForSelector('[data-testid="hatch-chat-compose"]', {
+            timeout: 4000,
+          })
+          .catch(async () => {
+            await page
+              .evaluate(() => {
+                const btns = Array.from(
+                  document.querySelectorAll<HTMLElement>(
+                    'nav button, aside button, [class*="sidebar"] button, [class*="rail"] button, header button'
+                  )
+                );
+                const toggle = btns.find((el) =>
+                  /chat|thread|sidebar|message|conversation|trò\s*chuyện|đoạn/i.test(
+                    (el.getAttribute('aria-label') || '') +
+                      ' ' +
+                      (el.title || '') +
+                      ' ' +
+                      (el.getAttribute('data-testid') || '')
+                  )
+                );
+                toggle?.click();
+              })
+              .catch(() => {});
+            await new Promise((r) => setTimeout(r, 700));
+          });
+      });
+
+    // Mark the found control, then click it with a real CDP mouse event —
+    // trusted input survives a half-hydrated React tree where a bare
+    // el.click() can be swallowed.
+    const tryClick = async (): Promise<string | null> => {
+      const strategy = await page.evaluate(() => {
+        const mark = (el: HTMLElement) => {
+          el.setAttribute('data-muse-nc', '1');
+        };
+        // 0) Stable test hook — Muse renders the "+" as hatch-chat-compose.
+        const hook = document.querySelector<HTMLElement>(
+          '[data-testid="hatch-chat-compose"]'
+        );
+        if (hook) {
+          mark(hook);
+          return 'compose-testid';
+        }
         const clickables = Array.from(
           document.querySelectorAll<HTMLElement>(
             'button, a, [role="button"], [role="link"], li > *'
           )
         );
-        // 1) Explicit "New chat" label — most reliable when present.
+        // 1) Explicit "New (side) chat" label — words may not be adjacent.
         const labelled = clickables.find((el) =>
-          /new\s*chat|chat\s*mới|cuộc\s*trò\s*chuyện\s*mới/i.test(
+          /\bnew\b[^.]{0,24}\bchat\b|chat\s*mới|cuộc\s*trò\s*chuyện\s*mới|tạo\s*chat|tạo\s*đoạn\s*chat/i.test(
             (el.getAttribute('aria-label') || '') +
               ' ' +
               (el.title || '') +
@@ -259,11 +488,11 @@ class MuseDriverService {
           )
         );
         if (labelled) {
-          labelled.click();
+          mark(labelled);
           return 'label';
         }
-        // 2) "+" affordance near a sidebar section that holds chats —
-        //    look for a header mentioning chats/history then its "+".
+        // 2) "+" affordance near the chats section header — may be an
+        //    icon-only button or a sibling a few levels up.
         const headers = Array.from(
           document.querySelectorAll<HTMLElement>('aside *, nav *, [class*="sidebar"] *')
         );
@@ -273,33 +502,170 @@ class MuseDriverService {
           ) && (el.textContent || '').trim().length < 40
         );
         if (chatHeader) {
-          const scope = chatHeader.parentElement || chatHeader;
-          const plus = scope.querySelector<HTMLElement>(
-            'button, [role="button"], svg, a'
-          );
-          const plusBtn =
-            plus &&
-            ((plus.textContent || '').trim() === '+' ||
-              /add|new|plus/i.test(plus.getAttribute('aria-label') || ''));
-          if (plus && plusBtn) {
-            plus.click();
-            return 'sidebar-plus';
+          let scope: HTMLElement | null = chatHeader;
+          for (let depth = 0; depth < 4 && scope; depth++) {
+            scope = scope.parentElement;
+            if (!scope) break;
+            const buttons = Array.from(
+              scope.querySelectorAll<HTMLElement>(
+                'button, a, [role="button"], [class*="cursor-pointer"]'
+              )
+            ).filter(
+              (el) =>
+                (chatHeader.compareDocumentPosition(el) &
+                  Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+            );
+            const plus = buttons.find((el) => {
+              const text = (el.textContent || '').trim();
+              const label = el.getAttribute('aria-label') || '';
+              const qualifies =
+                text === '+' ||
+                /add|new|plus|create|tạo|mới/i.test(label) ||
+                (!text && el.querySelector('svg'));
+              // Never click outside the sidebar — message-area icon buttons
+              // ("More options", "React", media openers) match otherwise.
+              return (
+                qualifies &&
+                !!el.closest('nav, aside, [class*="sidebar"]')
+              );
+            });
+            if (plus) {
+              mark(plus);
+              return 'sidebar-plus';
+            }
           }
         }
         return null;
       });
-      if (!strategy) {
-        // 3) Reload the app root — lands on the default/new composer.
-        await page.goto(new URL(page.url()).origin + '/', {
-          waitUntil: 'domcontentloaded',
-        });
-      }
-      await page.waitForSelector('textarea', { timeout: 15000 });
-      // Let the new thread mount before we paste into it.
+      if (!strategy) return null;
+      // Log the marked control so silent no-op clicks are diagnosable —
+      // an icon-only fallback could mark the wrong button.
+      const marked = await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>('[data-muse-nc="1"]');
+        if (!el) return 'none';
+        return `${el.tagName.toLowerCase()} label="${el.getAttribute('aria-label')}" title="${el.title}" testid="${el.getAttribute('data-testid')}" text="${(el.textContent || '').trim().slice(0, 20)}"`;
+      });
+      console.log(`[MuseDriver] new-chat target (${strategy}): ${marked}`);
+      await page
+        .click('[data-muse-nc="1"]')
+        .catch(() =>
+          page.evaluate(() => {
+            const el = document.querySelector<HTMLElement>('[data-muse-nc="1"]');
+            el?.click();
+          })
+        )
+        .finally(() =>
+          page
+            .evaluate(() =>
+              document
+                .querySelector('[data-muse-nc="1"]')
+                ?.removeAttribute('data-muse-nc')
+            )
+            .catch(() => {})
+        );
+      return strategy;
+    };
+
+    // Empty composer = clean context regardless of which thread it is —
+    // a fresh side chat shows no new row/url until the first message is
+    // sent, so the ONLY reliable success signal for an already-empty start
+    // is "still empty". With bubbles present, require a real change.
+    const switched = async (): Promise<boolean> =>
+      page
+        .waitForFunction(
+          (p: { title: string; rows: number; bubbles: number; url: string }) => {
+            const cur = document.querySelector('[aria-current="page"]');
+            const t = cur ? (cur.textContent || '').trim() : '';
+            const rows = document.querySelectorAll(
+              '[data-testid="hatch-thread-row"]'
+            ).length;
+            const bubbles = document.querySelectorAll('[class*="group/msg"]').length;
+            return (
+              bubbles === 0 ||
+              t !== p.title ||
+              rows > p.rows ||
+              location.href !== p.url
+            );
+          },
+          { timeout: 5000 },
+          prev
+        )
+        .then(() => true)
+        .catch(() => false);
+
+    let strategy: string | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      strategy = await tryClick();
+      if (!strategy) break;
+      if (await switched()) break;
+      const after = await page
+        .evaluate(() => {
+          const cur = document.querySelector('[aria-current="page"]');
+          return {
+            title: cur ? (cur.textContent || '').trim().slice(0, 30) : '',
+            rows: document.querySelectorAll('[data-testid="hatch-thread-row"]').length,
+            bubbles: document.querySelectorAll('[class*="group/msg"]').length,
+            url: location.href,
+          };
+        })
+        .catch(() => null);
+      console.log(
+        `[MuseDriver] new-chat click #${attempt} (${strategy}) did not switch thread — retrying. prev=${JSON.stringify(prev)} after=${JSON.stringify(after)}`
+      );
+      strategy = null;
       await new Promise((r) => setTimeout(r, 800));
-      console.log(`[MuseDriver] new chat opened via ${strategy ?? 'reload'}`);
+    }
+    if (!strategy) {
+      await this.dumpNewChatDebug(page);
+      throw new Error(
+        'new_chat được yêu cầu nhưng không mở được side chat mới trong Muse (nút + không phản hồi) — hủy để tránh gửi nhầm vào thread cũ'
+      );
+    }
+    await page.waitForSelector('textarea', { timeout: 15000 });
+    // Let the new thread mount before we paste into it.
+    await new Promise((r) => setTimeout(r, 600));
+    console.log(`[MuseDriver] new chat opened via ${strategy}`);
+  }
+
+  /** On new-chat failure, capture what the automation page actually looks
+   *  like — headless sessions render a different DOM than a normal browser
+   *  (sidebar collapsed, popovers closed), so guessing selectors never ends.
+   *  A screenshot + the sidebar/popover HTML goes to data/debug/ so the next
+   *  breakage self-diagnoses on any machine. */
+  private async dumpNewChatDebug(page: Page): Promise<void> {
+    try {
+      const dir = dataPath('debug');
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = Date.now();
+      await page.screenshot({ path: path.join(dir, `newchat-${ts}.png`) });
+      const dom = await page.evaluate(() => {
+        const pick = document.querySelector(
+          'nav, aside, [class*="sidebar"], [class*="rail"], [role="dialog"], [data-testid*="chat"]'
+        );
+        const header = document.querySelector('header, [class*="header"]');
+        const dump =
+          '=== PICKED ===\n' +
+          (pick ? pick.outerHTML : '(none)') +
+          '\n\n=== HEADER ===\n' +
+          (header ? header.outerHTML : '(none)') +
+          '\n\n=== ALL aria/testid BUTTONS ===\n' +
+          Array.from(
+            document.querySelectorAll<HTMLElement>(
+              'button[aria-label], [role="button"][aria-label], [data-testid]'
+            )
+          )
+            .map(
+              (el) =>
+                `<${el.tagName.toLowerCase()} testid="${el.getAttribute('data-testid')}" label="${el.getAttribute('aria-label')}" title="${el.title}">${(el.textContent || '').trim().slice(0, 30)}`
+            )
+            .slice(0, 60)
+            .join('\n');
+        return dump;
+      });
+      fs.writeFileSync(path.join(dir, `newchat-${ts}.html`), dom);
+      console.log(`[MuseDriver] new-chat debug → data/debug/newchat-${ts}.{png,html}`);
     } catch (e) {
-      console.log('[MuseDriver] openNewChat failed — staying on current thread:', e);
+      console.log('[MuseDriver] debug dump failed:', e);
     }
   }
 
@@ -332,22 +698,49 @@ class MuseDriverService {
           // <input type=file>; a synthetic DataTransfer on .files half-works:
           // the chip renders but upload state breaks → "Delivery not confirmed".
           const tmpFiles: string[] = [];
+          // persistMediaFile creates this lazily — the attach path writes
+          // frame-* temps straight into it, so it must exist first too.
+          fs.mkdirSync(MEDIA_DIR, { recursive: true });
+          const extFor = (mime: string): string => {
+            if (mime.includes('png')) return 'png';
+            if (mime.includes('webp')) return 'webp';
+            if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+            if (mime.includes('gif')) return 'gif';
+            if (mime.includes('quicktime')) return 'mov';
+            if (mime.includes('webm')) return 'webm';
+            if (mime.includes('mp4') || mime.includes('video')) return 'mp4';
+            if (mime.includes('mpeg')) return 'mp3';
+            if (mime.includes('wav')) return 'wav';
+            if (mime.includes('ogg')) return 'ogg';
+            if (mime.includes('m4a') || mime.includes('mp4a') || mime.includes('aac')) return 'm4a';
+            if (mime.includes('audio')) return 'mp3';
+            return 'bin';
+          };
           for (const [i, u] of images.entries()) {
             const m = u.match(/^data:([^;]+);base64,(.+)$/s);
             if (!m) continue;
-            const ext = m[1].includes('png') ? 'png' : m[1].includes('webp') ? 'webp' : 'jpg';
+            const ext = extFor(m[1]);
             const p = path.join(MEDIA_DIR, `frame-${Date.now()}-${i}.${ext}`);
             fs.writeFileSync(p, Buffer.from(m[2], 'base64'));
             tmpFiles.push(p);
           }
           // Composer-local pending attachment? A blob: preview img / hatch
           // marker inside the composer's ancestor means a resend already
-          // attached — don't stack duplicates.
+          // attached — don't stack duplicates. MUST exclude elements inside
+          // posted message bubbles (group/msg): Muse keeps blob: previews on
+          // already-sent attachments, and the widened scope can reach them —
+          // matching one fakes "already attached" and sends a TEXT-ONLY
+          // duplicate prompt (the exact bug seen in the wild).
           const pendingProbe = `(() => {
             const ta = document.querySelector('textarea');
             let scope = ta;
             for (let i = 0; i < 6 && scope && scope.parentElement; i++) scope = scope.parentElement;
-            return !!(scope && scope.querySelector('img[src^="blob:"], [data-hatch-image-src], [data-hatch-video-src]'));
+            if (!scope) return false;
+            const cands = scope.querySelectorAll('img[src^="blob:"], video[src^="blob:"], audio[src^="blob:"], [data-hatch-image-src], [data-hatch-video-src], [data-hatch-audio-src]');
+            for (const el of Array.from(cands)) {
+              if (!el.closest('[class*="group/msg"]')) return true;
+            }
+            return false;
           })()`;
           const already = await page.evaluate(pendingProbe);
           let how = 'skip-pending';
@@ -363,25 +756,72 @@ class MuseDriverService {
               }))
             );
             console.log('[MuseDriver] file inputs:', JSON.stringify(inputInfo));
+            // Honour the composer's accept list — feeding it a file type it
+            // doesn't take (e.g. mp4 on an image-only input) either breaks
+            // the upload state or silently drops the reference. Drop
+            // unsupported files here instead; the prompt still describes
+            // whatever did attach.
+            const accept = (inputInfo[0]?.accept || '').toLowerCase();
+            const allows = (f: string): boolean => {
+              if (!accept) return true;
+              const ext = '.' + f.split('.').pop()!.toLowerCase();
+              return accept.split(',').some((tok) => {
+                const t = tok.trim();
+                if (!t) return false;
+                if (t === ext) return true;
+                if (t === '*/*' || t === '*') return true;
+                if (t.endsWith('/*')) {
+                  const grp = t.slice(0, -2);
+                  const imgExt = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'];
+                  const vidExt = ['.mp4', '.webm', '.mov', '.mkv', '.avi'];
+                  const audExt = ['.mp3', '.m4a', '.wav', '.ogg', '.aac', '.flac'];
+                  if (grp === 'image') return imgExt.includes(ext);
+                  if (grp === 'video') return vidExt.includes(ext);
+                  if (grp === 'audio') return audExt.includes(ext);
+                }
+                return false;
+              });
+            };
+            const rejected = tmpFiles.filter((f) => !allows(f));
+            const send = tmpFiles.filter(allows);
+            if (rejected.length) {
+              console.log(`[MuseDriver] ${rejected.length} file(s) bị accept="${accept}" loại:`, rejected.map((f) => f.split(/[\\/]/).pop()));
+            }
             const input = await page.$('input[type="file"]');
-            if (input) {
+            if (input && send.length) {
               try {
-                await input.uploadFile(...tmpFiles);
+                await input.uploadFile(...send);
                 how = 'upload';
               } catch (e) {
                 how = 'err:' + String(e);
               }
+            } else if (!send.length) {
+              how = 'reject-all';
             } else {
               how = 'no-input';
             }
           }
           console.log('[MuseDriver] attach', images.length, 'image(s) via', how);
+          // The prompt talks about "ảnh đính kèm" — sending it WITHOUT the
+          // images attached makes Muse answer with text ("mình vẫn chưa…"),
+          // which surfaces as the confusing "không chứa link media" failure.
+          // Fail fast instead so the queue retries with a clear cause.
+          if (!already && images.length && !tmpFiles.length) {
+            throw new Error('No reference images could be decoded (all refs dropped before attach).');
+          }
+          if (how === 'err' || how.startsWith('err:') || how === 'no-input' || how === 'reject-all') {
+            throw new Error(`Không attach được ảnh tham chiếu vào composer (${how}).`);
+          }
           // Wait for the composer's attachment chip/preview to render and
           // the upload to settle — sending early → "Delivery not confirmed".
           if (how === 'upload' || how === 'skip-pending') {
+            let attached = false;
             for (let t = 0; t < 25; t++) {
               await new Promise((r) => setTimeout(r, 400));
-              if (await page.evaluate(pendingProbe)) break;
+              if (await page.evaluate(pendingProbe)) { attached = true; break; }
+            }
+            if (!attached && !already) {
+              throw new Error('Ảnh tham chiếu upload xong nhưng chip preview không xuất hiện sau 10s.');
             }
             await new Promise((r) => setTimeout(r, 1500));
           }
@@ -511,7 +951,11 @@ class MuseDriverService {
             if (cands.length === 0) {
               cands = allEls.filter((el) => starts(el) && noMatchChild(el, starts));
             }
-            if (cands.length === 0) return { reply: '', failed: false };
+            // Bubble not rendered yet (heavy attachments post slowly) — the
+            // caller reads result.media.length, so EVERY field it touches
+            // must exist or this early return 500s the whole request.
+            if (cands.length === 0)
+              return { reply: '', failed: false, media: [], mediaDbg: [], rcFound: false };
 
             const best = Math.max(...cands.map(lcaScore));
             const pool = cands
@@ -790,20 +1234,53 @@ class MuseDriverService {
               txt: norm((g as HTMLElement).innerText).slice(0, 24),
             })),
           };
-        }, cleanPrompt);
-        const cleanText = result.reply;
-        const media = result.media;
+        }, cleanPrompt).catch(() => null); // context destroyed mid-nav → skip tick
+        if (!result) continue;
+        const cleanText = result.reply ?? '';
+        const media = result.media ?? [];
         lastDbg = { rcFound: result.rcFound, lcaCls: result.lcaCls, bubCls: result.bubCls, bubTxt: result.bubTxt, idxB: result.idxB, groupsIdx: result.groupsIdx, mediaDbg: result.mediaDbg };
 
         // "Delivery not confirmed" means the realtime socket dropped the send —
         // resend the prompt a limited number of times instead of waiting out.
-        if (result.failed && !cleanText) {
+        // THREE guards, all learned from real duplicates:
+        //  - !result.rcFound: a reply container means the original send DID
+        //    land and Muse is already answering — resending is a duplicate.
+        //  - 12s grace: multi-MB attachment uploads take a while to confirm,
+        //    4s was firing during normal in-flight uploads.
+        //  - pending chips: chips still in the composer = the ORIGINAL send
+        //    is still uploading — a resend now would skip re-attaching (the
+        //    probe sees those chips) and land a text-only twin.
+        if (result.failed && !cleanText && !result.rcFound) {
           failedSince ??= Date.now();
-          if (Date.now() - failedSince > 4000 && resends < 2) {
-            resends++;
-            failedSince = null;
-            console.log('[MuseDriver] Delivery not confirmed — resending prompt (attempt', resends + 1, ')');
-            await sendOnce();
+          if (Date.now() - failedSince > 12000 && resends < 2) {
+            const stillUploading = await page
+              .evaluate(() => {
+                const ta = document.querySelector('textarea');
+                let scope: HTMLElement | null = ta;
+                for (let i = 0; i < 6 && scope && scope.parentElement; i++)
+                  scope = scope.parentElement;
+                if (!scope) return false;
+                const cands = scope.querySelectorAll(
+                  'img[src^="blob:"], video[src^="blob:"], audio[src^="blob:"], [data-hatch-image-src], [data-hatch-video-src], [data-hatch-audio-src]'
+                );
+                // Only composer chips count — blob: previews inside posted
+                // bubbles (group/msg) are the LAST send's attachments, not
+                // an in-flight upload.
+                for (const el of Array.from(cands)) {
+                  if (!el.closest('[class*="group/msg"]')) return true;
+                }
+                return false;
+              })
+              .catch(() => false);
+            if (stillUploading) {
+              failedSince = null;
+              console.log('[MuseDriver] delivery pending with attachments — waiting, not resending');
+            } else {
+              resends++;
+              failedSince = null;
+              console.log('[MuseDriver] Delivery not confirmed — resending prompt (attempt', resends + 1, ')');
+              await sendOnce();
+            }
           }
         } else {
           failedSince = null;
@@ -913,12 +1390,11 @@ class MuseDriverService {
 
   async close(): Promise<void> {
     this.slots.clear();
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch {}
-      this.browser = null;
-    }
+    const browsers = [...this.browsers.values()];
+    this.browsers.clear();
+    await Promise.all(browsers.map(async (b) => {
+      try { await b.close(); } catch {}
+    }));
   }
 }
 

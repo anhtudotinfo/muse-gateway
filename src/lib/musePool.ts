@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
-import { getSavedSessions } from './museService';
+import { dataPath } from './dataDir';
+import { getSavedSessions, testSessionOnline, updateSessionTest } from './museService';
 import { museDriver } from './museDriver';
 import { settingsService } from './settings';
 import './logBuffer';
@@ -32,6 +33,8 @@ export interface PoolAccountStats {
   totalRequests: number;
   lastUsedAt: number;
   lastError: string;
+  /** Last time the auto-heal tick re-tested this account's session. */
+  lastHealCheck?: number;
 }
 
 export interface PoolAccountView extends PoolAccountStats {
@@ -72,12 +75,14 @@ export interface UsageEntry {
   replyChars?: number;
 }
 
-const POOL_FILE = path.join(process.cwd(), 'data', 'pool.json');
-const USAGE_FILE = path.join(process.cwd(), 'data', 'usage.jsonl');
+const POOL_FILE = dataPath('pool.json');
+const USAGE_FILE = dataPath('usage.jsonl');
 const COOLDOWN_BASE_MS = 5 * 60 * 1000; // transient: 5min, scales with failCount
 const COOLDOWN_MAX_MS = 60 * 60 * 1000; // quota: 1h
 const COOLDOWN_AUTH_MS = 24 * 60 * 60 * 1000; // auth/dead cookie: 24h
 const MAX_ACCOUNTS_PER_REQUEST = 8;
+const HEAL_TICK_MS = 2 * 60 * 1000; // scan cooling accounts every 2min
+const HEAL_RECHECK_MS = 10 * 60 * 1000; // re-test each account at most every 10min
 
 function defaultStats(): PoolAccountStats {
   return {
@@ -102,6 +107,50 @@ class MusePoolService {
     // configured interval so their pages/realtime sockets stay warm.
     const t = setInterval(() => { void this.keepAliveTick(); }, 60_000);
     t.unref?.();
+    // Auto-heal loop — re-tests accounts parked in cooldown and pulls them
+    // back early when the session turns out to be alive (misclassified
+    // error, quota window elapsed, transient outage…).
+    const h = setInterval(() => { void this.healTick(); }, HEAL_TICK_MS);
+    h.unref?.();
+  }
+
+  /** Cheap liveness probe for cooling accounts — pure HTTPS, no browser.
+   *  A session that answers 200 gets reset back into the pool; a dead one
+   *  gets lastStatus=invalid so the UI shows DEAD and prompts re-login.
+   *  Proxied accounts are skipped (the probe can't tunnel through them). */
+  private async healTick(): Promise<void> {
+    try {
+      if (!settingsService.get().autoHealEnabled) return;
+      const now = Date.now();
+      const sessions = getSavedSessions();
+      for (const s of sessions) {
+        if (s.proxy) continue;
+        const st = this.statsFor(s.id);
+        if (!st.enabled || st.cooldownUntil <= now) continue;
+        if (st.lastHealCheck && now - st.lastHealCheck < HEAL_RECHECK_MS) continue;
+
+        st.lastHealCheck = now;
+        this.setStats(s.id, st);
+
+        const res = await testSessionOnline(s.cookies);
+        if (res.valid) {
+          this.resetAccount(s.id);
+          updateSessionTest(s.id, true);
+          console.log(`[MusePool] auto-heal: "${s.name}" sống lại — trả về pool`);
+        } else {
+          updateSessionTest(s.id, false);
+          if (st.cooldownReason !== 'auth') {
+            const cur = this.statsFor(s.id);
+            if (cur.cooldownReason !== 'auth') {
+              cur.cooldownReason = 'auth';
+              cur.cooldownUntil = now + COOLDOWN_AUTH_MS;
+              this.setStats(s.id, cur);
+            }
+          }
+          console.log(`[MusePool] auto-heal: "${s.name}" DEAD (${res.status || res.message}) — cần đăng nhập lại`);
+        }
+      }
+    } catch {}
   }
 
   private async keepAliveTick(): Promise<void> {
@@ -307,6 +356,37 @@ class MusePoolService {
 
   async chat(opts: ChatOptions): Promise<ChatResult> {
     this.load();
+
+    // Pinned request — thread continuation only works on the account that
+    // owns the thread, so failing over to another account would silently
+    // send the prompt to that account's Main chat. Pin = this account only.
+    if (opts.pinAccount) {
+      const pinned = getSavedSessions().find((s) => s.id === opts.pinAccount);
+      if (!pinned) {
+        throw new Error(`Không tìm thấy tài khoản pin "${opts.pinAccount}" trong sessions.`);
+      }
+      console.log(`[MusePool] route → "${pinned.name}" (pinned${opts.thread ? `, thread=${opts.thread}` : ''})`);
+      const t0 = Date.now();
+      let result: ChatResult;
+      try {
+        result = await museDriver.chat({ ...opts, sessionId: pinned.id });
+      } catch (err: any) {
+        this.applyFailure(pinned, err, t0, opts);
+        throw err;
+      }
+      const st = this.statsFor(pinned.id);
+      st.failCount = 0;
+      st.cooldownUntil = 0;
+      st.cooldownReason = '';
+      st.totalRequests++;
+      st.lastUsedAt = Date.now();
+      st.lastError = '';
+      this.setStats(pinned.id, st);
+      this.recordUsage(pinned.id, pinned.name, true, Date.now() - t0, opts.prompt, undefined, opts, result.text.length);
+      console.log(`[MusePool] "${pinned.name}" ok — ${Date.now() - t0}ms, reply ${result.text.length} chars${result.media?.length ? `, ${result.media.length} media` : ''}`);
+      return result;
+    }
+
     const combo = this.resolveCombo(opts.model);
     // Empty accountIds on a combo means "all accounts" (per the Combos UI).
     const accountIds = combo && combo.accountIds.length ? combo.accountIds : null;
@@ -417,6 +497,33 @@ class MusePoolService {
       String(err?.message || err).slice(0, 200),
       opts
     );
+    // 'auth' is a heuristic — the error text matched, but the session may be
+    // perfectly fine (page crash, textarea selector miss). Confirm with the
+    // cheap API probe: alive → downgrade to transient cooldown so the account
+    // returns in minutes, not 24h; dead → stamp lastStatus=invalid so the UI
+    // shows DEAD and offers re-login.
+    if (kind === 'auth' && !acc.proxy) {
+      void this.confirmDead(acc);
+    }
+  }
+
+  private async confirmDead(acc: Profile): Promise<void> {
+    try {
+      const res = await testSessionOnline(acc.cookies);
+      const st = this.statsFor(acc.id);
+      if (res.valid) {
+        // Misclassified — session is alive; treat as transient.
+        if (st.cooldownReason === 'auth') {
+          st.cooldownReason = 'transient';
+          st.cooldownUntil = Date.now() + COOLDOWN_BASE_MS;
+          this.setStats(acc.id, st);
+          console.log(`[MusePool] "${acc.name}" auth-fail nhưng session vẫn sống — giảm cooldown còn ${COOLDOWN_BASE_MS / 60000}m`);
+        }
+      } else {
+        updateSessionTest(acc.id, false);
+        console.log(`[MusePool] "${acc.name}" xác nhận DEAD — session hết hạn, cần đăng nhập lại`);
+      }
+    } catch {}
   }
 
   private recordUsage(

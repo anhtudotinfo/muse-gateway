@@ -1,0 +1,16 @@
+name = "muse-license"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+# npx wrangler kv namespace create LICENSE_KV → paste the printed id here
+[[kv_namespaces]]
+binding = "LICENSE_KV"
+id = "5098dd5ab1924d8e8f167eafbc16c359"
+
+# secrets (npx wrangler secret put …):
+#   MUSE_LICENSE_PRIVATE  — contents of data/.license-private.pem
+#   MUSE_LICENSE_PUBLIC   — the public PEM (same one embedded in the app)
+#   MUSE_ADMIN_TOKEN      — admin auth for /revoke /unbind /admin/list
+# vars:
+#   VERDICT_TTL_H = "24"   (default 24h offline grace)
+#   MAX_HWIDS     = "1"    (seats per floating key)

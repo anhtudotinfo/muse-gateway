@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteSessionProfile, getSavedSessions, saveSessionProfile } from '@/lib/museService';
+import { deleteSessionProfile, getSavedSessions, normalizeProxy, saveSessionProfile, updateSessionProxy } from '@/lib/museService';
 import { musePool } from '@/lib/musePool';
 
 export async function DELETE(
@@ -17,21 +17,26 @@ export async function DELETE(
   }
 }
 
-// Rename a saved session (keeps cookies + test state).
+// Update a saved session — rename and/or set its egress proxy.
 export async function PATCH(
   req: NextRequest,
   props: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await props.params;
-    const { name } = await req.json();
+    const body = await req.json();
     const existing = getSavedSessions().find((s) => s.id === id);
     if (!existing) {
       return NextResponse.json({ error: 'Không tìm thấy session' }, { status: 404 });
     }
-    const session = saveSessionProfile({ id, name: String(name || '').trim() || existing.name, cookies: existing.cookies });
+    if (body.proxy !== undefined) {
+      const proxy = normalizeProxy(body.proxy); // throws on bad input
+      const session = updateSessionProxy(id, proxy);
+      return NextResponse.json({ success: true, session });
+    }
+    const session = saveSessionProfile({ id, name: String(body.name || '').trim() || existing.name, cookies: existing.cookies });
     return NextResponse.json({ success: true, session });
   } catch (err: any) {
-    return NextResponse.json({ error: 'Lỗi đổi tên: ' + err?.message }, { status: 500 });
+    return NextResponse.json({ error: 'Lỗi cập nhật session: ' + err?.message }, { status: 500 });
   }
 }

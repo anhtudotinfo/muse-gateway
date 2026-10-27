@@ -39,7 +39,6 @@ const NAV: { key: TabKey; label: string; href: string; section?: string }[] = [
   { key: 'usage', label: 'Usage', href: '/usage' },
   { key: 'quota', label: 'Quota', href: '/quota' },
   { key: 'console', label: 'Console Log', href: '/console', section: 'System' },
-  { key: 'settings', label: 'Settings', href: '/settings' },
   { key: 'license', label: 'Bản quyền', href: '/license' },
 ];
 

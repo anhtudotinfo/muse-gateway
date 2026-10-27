@@ -28,6 +28,7 @@ import StatusAlert, { type StatusAlertStatus } from '@/components/endpoint/Statu
 import HelpTooltip from '@/components/endpoint/HelpTooltip';
 import SecurityWarning from '@/components/endpoint/SecurityWarning';
 import KeyAccessControls from '@/components/endpoint/KeyAccessControls';
+import KeySnippetModal from '@/components/endpoint/KeySnippetModal';
 import type { EndpointKey, KeyAccess } from '@/components/endpoint/types';
 
 // Per-key "Restrict access" rules are persisted on the key record
@@ -803,20 +804,26 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     setVisibleKeys(prev => new Set(prev).add(keyId));
   };
 
+  const revealKey = useCallback(async (keyId: string): Promise<string> => {
+    if (revealedKeys[keyId]) return revealedKeys[keyId];
+    const res = await fetch(`/api/keys?reveal=${encodeURIComponent(keyId)}`);
+    const data = await safeJson(res);
+    if (!data.key) throw new Error('Không lấy được key');
+    setRevealedKeys(prev => ({ ...prev, [keyId]: data.key as string }));
+    return data.key as string;
+  }, [revealedKeys]);
+
   const handleCopyKey = async (key: EndpointKey) => {
     let full = revealedKeys[key.id];
     if (!full) {
       try {
-        const res = await fetch(`/api/keys?reveal=${encodeURIComponent(key.id)}`);
-        const data = await safeJson(res);
-        if (data.key) {
-          full = data.key as string;
-          setRevealedKeys(prev => ({ ...prev, [key.id]: full! }));
-        }
+        full = await revealKey(key.id);
       } catch { /* fall back to masked */ }
     }
     copyWithToast(full || key.key, key.id, 'API key');
   };
+
+  const [snippetKey, setSnippetKey] = useState<EndpointKey | null>(null);
 
   const [baseUrl, setBaseUrl] = useState('/v1');
 
@@ -1158,6 +1165,13 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                           {copied === key.id ? 'check' : 'content_copy'}
                         </span>
                       </button>
+                      <button
+                        onClick={() => setSnippetKey(key)}
+                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                        title="Client config — cURL/Python/Node snippet"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">code</span>
+                      </button>
                     </div>
                   </div>
                   <p className="text-xs text-text-muted mt-1">
@@ -1211,6 +1225,18 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
           </div>
         )}
       </Card>
+
+      {/* Client config snippet modal */}
+      <KeySnippetModal
+        isOpen={!!snippetKey}
+        onClose={() => setSnippetKey(null)}
+        baseUrl={baseUrl}
+        keyId={snippetKey?.id || ''}
+        keyName={snippetKey?.name || ''}
+        revealKey={revealKey}
+        onCopy={copyWithToast}
+        copiedId={copied}
+      />
 
       {/* Add Key Modal */}
       <Modal

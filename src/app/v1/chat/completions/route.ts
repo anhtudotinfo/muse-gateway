@@ -3,6 +3,7 @@ import { musePool } from '@/lib/musePool';
 import { apiKeyService } from '@/lib/apiKeys';
 import { extractPromptFromChatMessages } from '@/lib/promptExtractor';
 import { extractWorkspaceCwd } from '@/lib/toolBridge';
+import { licenseGate } from '@/lib/licenseGate';
 import type { ChatCompletionRequest } from '@/types';
 
 const corsHeaders = {
@@ -16,6 +17,8 @@ export async function OPTIONS() {
 }
 
 export async function POST(req: NextRequest) {
+  const gate = licenseGate(corsHeaders);
+  if (gate) return gate;
   try {
     const apiKey = apiKeyService.resolveKey(
       req.headers.get('authorization') || req.headers.get('x-api-key')
@@ -29,6 +32,11 @@ export async function POST(req: NextRequest) {
 
     const body: ChatCompletionRequest = await req.json();
     const { model = 'muse-chat', messages = [], stream = false, new_chat = false } = body;
+    // Thread continuation + account pinning — follow-up tasks must return to
+    // the same Muse conversation, and that thread only exists on the account
+    // that created it.
+    const thread: string | null = (body as any).thread ?? (body as any).thread_id ?? null;
+    const pinAccount: string | null = (body as any).account ?? (body as any).account_id ?? null;
 
     // Per-key access restriction: key may only call allow-listed models/combos
     if (!apiKeyService.allowsModel(apiKey, model)) {
@@ -92,7 +100,7 @@ export async function POST(req: NextRequest) {
             } catch {}
           };
           try {
-            const { media } = await musePool.chat({
+            const { media, threadUrl, accountId } = await musePool.chat({
               prompt: formattedPrompt,
               images,
               signal: req.signal,
@@ -102,6 +110,8 @@ export async function POST(req: NextRequest) {
               keyName,
               endpoint: '/v1/chat/completions',
               newChat: new_chat,
+              thread,
+              pinAccount,
               onChunk: (chunk: string) => {
                 const ssePayload = {
                   id: completionId,
@@ -123,19 +133,23 @@ export async function POST(req: NextRequest) {
             // Media attachments arrive after the reply completes — emit as a
             // final content delta so streaming clients see the links too.
             // Local /api/media/* paths resolve against the request origin.
-            if (media.length) {
+            if (media.length || threadUrl) {
               const mediaPayload = {
                 id: completionId,
                 object: 'chat.completion.chunk',
                 created,
                 model,
+                muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
                 choices: [
                   {
                     index: 0,
                     delta: {
                       content:
-                        '\n\nAttachments:\n' +
-                        media.map((u) => `- ${u.startsWith('http') ? u : new URL(req.url).origin + u}`).join('\n'),
+                        (media.length
+                          ? '\n\nAttachments:\n' +
+                            media.map((u) => `- ${u.startsWith('http') ? u : new URL(req.url).origin + u}`).join('\n')
+                          : '') +
+                        (threadUrl ? `\n\nThread: ${threadUrl}` : ''),
                     },
                     finish_reason: null,
                   },
@@ -183,7 +197,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle Synchronous / Non-streaming JSON response
-    const { text, media } = await musePool.chat({
+    const { text, media, threadUrl, accountId } = await musePool.chat({
       prompt: formattedPrompt,
       images,
       signal: req.signal,
@@ -193,11 +207,14 @@ export async function POST(req: NextRequest) {
       keyName,
       endpoint: '/v1/chat/completions',
       newChat: new_chat,
+      thread,
+      pinAccount,
     });
     const origin = new URL(req.url).origin;
-    const content = media.length
-      ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
-      : text;
+    const content =
+      (media.length
+        ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
+        : text) + (threadUrl ? `\n\nThread: ${threadUrl}` : '');
     const promptTokens = Math.max(1, Math.round(formattedPrompt.length / 4));
     const completionTokens = Math.max(1, Math.round(content.length / 4));
 
@@ -206,6 +223,7 @@ export async function POST(req: NextRequest) {
       object: 'chat.completion',
       created,
       model,
+      muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
       choices: [
         {
           index: 0,

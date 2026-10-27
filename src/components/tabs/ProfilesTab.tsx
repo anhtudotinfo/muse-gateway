@@ -18,6 +18,11 @@ interface ProfilesTabProps {
   testingProfileId?: string | null;
   onTestAll?: () => void;
   onRenameProfile?: (profile: Profile) => void;
+  /** Re-login flow — opens the capture browser targeted at this card so
+   *  fresh cookies overwrite it instead of adding a duplicate. */
+  onRelogin?: (profile: Profile) => void;
+  /** True while a login-capture browser is open — cards show busy. */
+  capturingProfileId?: string | null;
   onToast?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
@@ -45,6 +50,8 @@ export function ProfilesTab({
   testingProfileId,
   onTestAll,
   onRenameProfile,
+  onRelogin,
+  capturingProfileId,
   onToast,
 }: ProfilesTabProps) {
   const { maskEmails } = useApp();
@@ -53,7 +60,9 @@ export function ProfilesTab({
   const [keepAliveMin, setKeepAliveMin] = useState(30);
   const [keeping, setKeeping] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const backupRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch('/api/settings')
@@ -133,6 +142,70 @@ export function ProfilesTab({
     }
   };
 
+  const backupAll = async () => {
+    try {
+      const j = await (await fetch('/api/backup')).json();
+      const blob = new Blob([JSON.stringify(j, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `muse-backup-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast(`Đã sao lưu toàn bộ (${Object.keys(j.files || {}).length} file dữ liệu)`, 'success');
+    } catch {
+      toast('Lỗi sao lưu', 'error');
+    }
+  };
+
+  const restoreBackup = async (file: File) => {
+    if (!confirm(`Khôi phục backup từ "${file.name}"?\n\nSessions/pool/settings/keys hiện tại sẽ bị GHI ĐÈ bằng nội dung file backup.`)) {
+      if (backupRef.current) backupRef.current.value = '';
+      return;
+    }
+    setRestoring(true);
+    try {
+      const parsed = JSON.parse(await file.text());
+      const res = await fetch('/api/backup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || res.statusText);
+      toast(`Đã khôi phục: ${(j.restored || []).join(', ')}`, 'success');
+      onRefresh();
+    } catch (e: any) {
+      toast('Lỗi khôi phục: ' + (e?.message || e), 'error');
+    } finally {
+      setRestoring(false);
+      if (backupRef.current) backupRef.current.value = '';
+    }
+  };
+
+  const setProxy = async (p: Profile) => {
+    const cur = p.proxy || '';
+    const input = prompt(
+      `Proxy cho "${p.name}" — http://[user:pass@]host:port hoặc socks5://host:port\n(để trống = kết nối trực tiếp, "x" = xoá proxy)`,
+      cur,
+    );
+    if (input === null) return;
+    const v = input.trim();
+    const proxy = v === '' || v.toLowerCase() === 'x' ? null : v;
+    try {
+      const res = await fetch(`/api/sessions/${p.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proxy }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || res.statusText);
+      toast(proxy ? `Đã đặt proxy cho "${p.name}"` : `Đã xoá proxy của "${p.name}"`, 'success');
+      onRefresh();
+    } catch (e: any) {
+      toast('Lỗi đặt proxy: ' + (e?.message || e), 'error');
+    }
+  };
+
   return (
     <div className="tab-surface">
       <div className="ov-card-head">
@@ -162,6 +235,20 @@ export function ProfilesTab({
                 onClick: runKeepAliveAll,
               },
               {
+                label: testingProfileId === 'all' ? 'Đang kiểm tra…' : 'Kiểm tra tất cả',
+                disabled: !profiles.length || testingProfileId === 'all',
+                onClick: () => onTestAll?.(),
+              },
+              {
+                label: 'Sao lưu toàn bộ (backup)',
+                onClick: backupAll,
+              },
+              {
+                label: restoring ? 'Đang khôi phục…' : 'Khôi phục backup…',
+                disabled: restoring,
+                onClick: () => backupRef.current?.click(),
+              },
+              {
                 label: 'Xuất tài khoản (.json)',
                 disabled: !profiles.length,
                 onClick: exportAccounts,
@@ -170,11 +257,6 @@ export function ProfilesTab({
                 label: importing ? 'Đang nhập…' : 'Nhập tài khoản…',
                 disabled: importing,
                 onClick: () => fileRef.current?.click(),
-              },
-              {
-                label: testingProfileId === 'all' ? 'Đang kiểm tra…' : 'Kiểm tra tất cả',
-                disabled: !profiles.length || testingProfileId === 'all',
-                onClick: () => onTestAll?.(),
               },
               { label: 'Làm mới', onClick: onRefresh },
             ]}
@@ -185,6 +267,13 @@ export function ProfilesTab({
             accept="application/json,.json"
             style={{ display: 'none' }}
             onChange={(e) => e.target.files?.[0] && importAccounts(e.target.files[0])}
+          />
+          <input
+            ref={backupRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => e.target.files?.[0] && restoreBackup(e.target.files[0])}
           />
         </div>
       </div>
@@ -231,19 +320,37 @@ export function ProfilesTab({
                   <span>{count} cookies</span>
                   <span>·</span>
                   <span>{new Date(p.updatedAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  {p.proxy && (
+                    <>
+                      <span>·</span>
+                      <span title={p.proxy} style={{ color: 'var(--color-primary, #6c5ce7)' }}>⇄ proxy</span>
+                    </>
+                  )}
                 </div>
 
                 <div className="acc-card-actions">
-                  {onLaunchProfile && (
+                  {onRelogin && p.lastStatus === 'invalid' ? (
                     <button
                       type="button"
                       className="acc-btn primary"
-                      onClick={() => onLaunchProfile(p)}
-                      disabled={busy}
-                      title="Mở trình duyệt với tài khoản này"
+                      onClick={() => onRelogin(p)}
+                      disabled={capturingProfileId === p.id}
+                      title="Mở trình duyệt — đăng nhập lại, session tự cập nhật vào thẻ này"
                     >
-                      {busy ? 'Đang mở…' : '▶ Mở'}
+                      {capturingProfileId === p.id ? 'Đang chờ…' : '🔐 Đăng nhập lại'}
                     </button>
+                  ) : (
+                    onLaunchProfile && (
+                      <button
+                        type="button"
+                        className="acc-btn primary"
+                        onClick={() => onLaunchProfile(p)}
+                        disabled={busy}
+                        title="Mở trình duyệt với tài khoản này"
+                      >
+                        {busy ? 'Đang mở…' : '▶ Mở'}
+                      </button>
+                    )
                   )}
                   {onTestProfile && (
                     <button
@@ -260,6 +367,8 @@ export function ProfilesTab({
                     items={[
                       { label: 'Nạp vào ô nhập', onClick: () => onUseProfile(p) },
                       { label: 'Đổi tên…', onClick: () => onRenameProfile?.(p) },
+                      { label: p.proxy ? 'Đổi proxy…' : 'Đặt proxy…', onClick: () => void setProxy(p) },
+                      ...(onRelogin ? [{ label: 'Đăng nhập lại (trình duyệt)', onClick: () => onRelogin(p) }] : []),
                       { label: 'Xóa tài khoản', danger: true, onClick: () => onDeleteProfile(p.id, p.name) },
                     ]}
                   />

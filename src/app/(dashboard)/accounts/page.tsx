@@ -28,6 +28,89 @@ export default function AccountsPage() {
   const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState('');
+  const captureJobRef = React.useRef<{ jobId: string | null; timer: ReturnType<typeof setInterval> | null }>({ jobId: null, timer: null });
+
+  const stopCapturePolling = () => {
+    if (captureJobRef.current.timer) {
+      clearInterval(captureJobRef.current.timer);
+    }
+    captureJobRef.current = { jobId: null, timer: null };
+    setIsCapturing(false);
+    setCaptureStatus('');
+  };
+
+  const [capturingProfileId, setCapturingProfileId] = useState<string | null>(null);
+
+  const handleLoginCapture = async (targetSessionId?: string | null, targetName?: string) => {
+    // Second click while waiting = cancel — server kills the browser.
+    if (isCapturing) {
+      const jobId = captureJobRef.current.jobId;
+      stopCapturePolling();
+      setCapturingProfileId(null);
+      if (jobId) {
+        fetch(`/api/login-capture?jobId=${jobId}`, { method: 'DELETE' }).catch(() => {});
+      }
+      showToast('Đã hủy phiên đăng nhập', 'info');
+      return;
+    }
+
+    setIsCapturing(true);
+    setCapturingProfileId(targetSessionId || null);
+    setCaptureStatus('Đang mở trình duyệt…');
+    try {
+      const res = await fetch('/api/login-capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ browserType: selectedBrowser, targetSessionId: targetSessionId || null }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.jobId) {
+        throw new Error(j.error || res.statusText);
+      }
+      captureJobRef.current.jobId = j.jobId;
+      setCaptureStatus(
+        targetName
+          ? `Đăng nhập lại "${targetName}" — session tự cập nhật vào thẻ khi vào được trang chủ…`
+          : 'Trình duyệt đã mở — đăng nhập Muse trong cửa sổ đó, session tự lưu khi vào được trang chủ…'
+      );
+
+      captureJobRef.current.timer = setInterval(async () => {
+        const jobId = captureJobRef.current.jobId;
+        if (!jobId) return;
+        try {
+          const r = await fetch(`/api/login-capture?jobId=${jobId}`);
+          const s = await r.json();
+          if (s.status === 'captured') {
+            stopCapturePolling();
+            setCapturingProfileId(null);
+            showToast(
+              s.deduped
+                ? 'Đã cập nhật session — cookies mới nhất'
+                : 'Đăng nhập thành công — session đã lưu vào danh sách',
+              'success',
+            );
+            reloadProfiles();
+          } else if (s.status === 'closed') {
+            stopCapturePolling();
+            setCapturingProfileId(null);
+            showToast('Cửa sổ trình duyệt đã đóng — chưa có session nào được lưu', 'info');
+          } else if (s.status === 'error') {
+            stopCapturePolling();
+            setCapturingProfileId(null);
+            showToast(s.error || 'Bắt session thất bại', 'error');
+          }
+        } catch {
+          // Poll hiccup — keep waiting, the job may still succeed.
+        }
+      }, 2000);
+    } catch (e: any) {
+      stopCapturePolling();
+      setCapturingProfileId(null);
+      showToast(e?.message || 'Không khởi động được phiên đăng nhập', 'error');
+    }
+  };
 
   const handlePasteClipboard = async () => {
     try {
@@ -247,6 +330,9 @@ export default function AccountsPage() {
         onClear={handleClear}
         onAddAccounts={handleAddAccounts}
         isAdding={isAdding}
+        onLoginCapture={() => handleLoginCapture()}
+        isCapturing={isCapturing}
+        captureStatus={captureStatus}
       />
       <section className="apple-card">
         <ProfilesTab
@@ -260,6 +346,8 @@ export default function AccountsPage() {
           testingProfileId={testingProfileId}
           onTestAll={handleTestAll}
           onRenameProfile={handleRenameProfile}
+          onRelogin={(p) => handleLoginCapture(p.id, p.name)}
+          capturingProfileId={capturingProfileId}
           onToast={showToast}
         />
       </section>

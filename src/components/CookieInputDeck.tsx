@@ -1,7 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActionsMenu } from '@/components/ActionsMenu';
+import { CookieGuideModal } from '@/components/CookieGuideModal';
+
+const GUIDE_SEEN_KEY = 'muse-cookie-guide-dismissed';
 
 interface CookieInputDeckProps {
   cookieInput: string;
@@ -19,6 +22,11 @@ interface CookieInputDeckProps {
   /** Add every detected cookie block as saved accounts, then auto-test each. */
   onAddAccounts: (blocks: string[]) => void;
   isAdding: boolean;
+  /** Open a real browser for the user to sign in — cookies are saved
+   * automatically once login lands. Clicking again cancels. */
+  onLoginCapture: () => void;
+  isCapturing: boolean;
+  captureStatus?: string;
 }
 
 const WATCH_TOKENS = ['hatch_sess', 'hatch_vml', 'hatch_gw', 'hatch_device', 'datr', 'theme'];
@@ -55,10 +63,29 @@ export function CookieInputDeck({
   onClear,
   onAddAccounts,
   isAdding,
+  onLoginCapture,
+  isCapturing,
+  captureStatus,
 }: CookieInputDeckProps) {
   const tokenKey = (t: string) => (t === 'hatch_device' ? 'hatch_native_auth_device' : t);
   const blocks = splitCookieBlocks(cookieInput);
   const hasInput = blocks.length > 0;
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  // Auto-open the guide on first visit — dismissible per-session via Đóng,
+  // permanently via "Đã hiểu — không hiện lại" (localStorage flag).
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(GUIDE_SEEN_KEY)) setGuideOpen(true);
+    } catch {}
+  }, []);
+
+  const dismissGuideForever = () => {
+    try {
+      localStorage.setItem(GUIDE_SEEN_KEY, '1');
+    } catch {}
+    setGuideOpen(false);
+  };
 
   return (
     <section className="apple-card">
@@ -70,6 +97,15 @@ export function CookieInputDeck({
           </div>
         </div>
         <div className="card-actions-group">
+          <button
+            type="button"
+            className="apple-tool-btn"
+            onClick={() => setGuideOpen(true)}
+            title="Hướng dẫn lấy cookie từng bước"
+            style={{ padding: '6px 10px' }}
+          >
+            ?
+          </button>
           <button type="button" className="apple-tool-btn" onClick={onPasteClipboard} title="Dán từ Clipboard">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
@@ -110,12 +146,12 @@ export function CookieInputDeck({
         ))}
       </div>
 
-      {/* Actions row */}
-      <div className="acc-actions-row">
+      {/* Actions row — left: add accounts; right: browser tools */}
+      <div className="acc-actions-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button
           type="button"
           className="btn-apple-primary"
-          style={{ flex: 'none', padding: '10px 22px' }}
+          style={{ flex: 'none', padding: '9px 20px' }}
           onClick={() => onAddAccounts(blocks)}
           disabled={isAdding || !hasInput}
         >
@@ -127,8 +163,21 @@ export function CookieInputDeck({
           </span>
         </button>
 
+        <button
+          type="button"
+          className="apple-tool-btn"
+          style={{ padding: '9px 16px' }}
+          onClick={onLoginCapture}
+          title="Mở trình duyệt thật — bạn tự đăng nhập Muse, session tự lưu lại"
+        >
+          {isCapturing ? '✕ Hủy đăng nhập' : '🔐 Đăng nhập & lưu'}
+        </button>
+
         <div style={{ flex: 1 }} />
 
+        <span className="ov-card-desc" style={{ fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+          Trình duyệt:
+        </span>
         <div className="apple-segmented-control" role="group" aria-label="Chọn trình duyệt">
           <button
             type="button"
@@ -148,18 +197,30 @@ export function CookieInputDeck({
         <button
           type="button"
           className="apple-tool-btn"
-          style={{ padding: '8px 14px' }}
+          style={{ padding: '9px 14px' }}
           onClick={onLaunch}
           disabled={isLaunching || !hasInput}
           title="Mở trình duyệt với cookie đang dán (không lưu)"
         >
-          {isLaunching ? 'Đang mở…' : '▶ Mở trình duyệt'}
+          {isLaunching ? 'Đang mở…' : '▶ Mở'}
         </button>
       </div>
 
       {launchStatus && isLaunching && (
         <div className="ov-card-desc" style={{ marginTop: 8 }}>{launchStatus}</div>
       )}
+
+      {isCapturing && (
+        <div className="ov-card-desc" style={{ marginTop: 8 }}>
+          {captureStatus || 'Trình duyệt đang mở — đăng nhập Muse trong cửa sổ đó, session sẽ tự lưu khi vào được trang chủ…'}
+        </div>
+      )}
+
+      <CookieGuideModal
+        isOpen={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        onNeverShow={dismissGuideForever}
+      />
     </section>
   );
 }

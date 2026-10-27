@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
+import { licenseGate } from '@/lib/licenseGate';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,6 +16,8 @@ export async function GET(
   _request: Request,
   props: { params: Promise<{ model: string }> }
 ) {
+  const gate = licenseGate(corsHeaders);
+  if (gate) return gate;
   const params = await props.params;
   const targetId = params.model;
   const model = SUPPORTED_MODELS.find((m) => m.id === targetId);

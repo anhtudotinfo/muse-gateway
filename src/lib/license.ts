@@ -3,19 +3,21 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
+import { dataPath } from './dataDir';
+import { onlineEnabled, onlineOk } from './licenseOnline';
 
 // Offline license system — no license server needed.
 //
-// A license key is self-contained:  MUSE1.<base64url(payload)>.<base64url(hmac)>
+// A license key is self-contained:  MUSE1.<base64url(payload)>.<base64url(ed25519 sig)>
 //   payload   = { e: email, x: expiresAtMs (0 = forever), h: hwid ('' = floating) }
-//   signature = HMAC-SHA256(payload, SECRET) truncated — verified with
-//               crypto.timingSafeEqual, so a forged/edited key fails.
+//   signature = Ed25519 over the payload — only the vendor's PRIVATE key can
+//               mint keys; the shipped app carries only the PUBLIC key, so
+//               reading the source can never forge a key.
 //
-// Keys are minted by `POST /api/license {action:'generate'}` or the CLI:
+// Keys are minted vendor-side by the CLI:
 //   node scripts/gen-license.mjs --email user@x.com --days 365 [--hwid HWID]
-//
-// SECRET: set MUSE_LICENSE_SECRET in env for real distribution — the default
-// below only protects keys inside this codebase.
+// Private key lives in data/.license-private.pem (vendor machine only) or
+// env MUSE_LICENSE_PRIVATE. Generate a pair with scripts/gen-keypair.mjs.
 
 export interface LicenseFile {
   email: string;
@@ -46,9 +48,30 @@ export interface LicenseView {
   reason: string;
 }
 
-const LICENSE_FILE = path.join(process.cwd(), 'data', 'license.json');
+const LICENSE_FILE = dataPath('license.json');
+const PRIVATE_KEY_FILE = dataPath('.license-private.pem');
 const KEY_PREFIX = 'MUSE1';
-const SECRET = process.env.MUSE_LICENSE_SECRET || 'muse-pool-local-license-v1';
+
+// Public half of the vendor keypair — safe to ship inside the app; it can
+// only VERIFY signatures, never create them. Regenerate the pair with
+// scripts/gen-keypair.mjs and paste the new public PEM here. Assembled at
+// runtime so a greppable "BEGIN PUBLIC KEY" never sits in the shipped chunk.
+const _pk = ['MCowBQYDK2VwAyEA', 'BaaN1+ps8SiqaaR+', 'bt57fFTP3p+L1/JK', 'jtwo64HgII8='];
+const PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----\n${_pk.join('')}\n-----END PUBLIC KEY-----`;
+
+/** Vendor private key — loaded from env or data/.license-private.pem.
+ *  Never shipped to users: only present on the machine minting keys. */
+function loadPrivateKey(): crypto.KeyObject | null {
+  const pem =
+    process.env.MUSE_LICENSE_PRIVATE ||
+    (fs.existsSync(PRIVATE_KEY_FILE) ? fs.readFileSync(PRIVATE_KEY_FILE, 'utf8') : '');
+  if (!pem.trim()) return null;
+  try {
+    return crypto.createPrivateKey(pem);
+  } catch {
+    return null;
+  }
+}
 
 /** Stable machine fingerprint: hostname + CPU + memory + first real MAC. */
 export function computeHwid(): string {
@@ -73,16 +96,31 @@ function maskMiddle(value: string, keep = 5): string {
   return '••••••••';
 }
 
-function signPayload(payloadB64: string): string {
-  return crypto.createHmac('sha256', SECRET).update(payloadB64).digest('base64url');
+function signPayload(payloadB64: string, privKey: crypto.KeyObject): string {
+  return crypto.sign(null, Buffer.from(payloadB64, 'utf8'), privKey).toString('base64url');
 }
 
-/** Mint a signed license key. expiresAtMs = 0 → forever; hwid = '' → floating. */
+function verifySignature(payloadB64: string, sigB64: string): boolean {
+  try {
+    return crypto.verify(
+      null,
+      Buffer.from(payloadB64, 'utf8'),
+      PUBLIC_KEY_PEM,
+      Buffer.from(sigB64, 'base64url')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Mint a signed license key — VENDOR-side only; needs the private key. */
 export function issueKey(email: string, expiresAtMs: number, hwid = ''): string {
+  const priv = loadPrivateKey();
+  if (!priv) throw new Error('Thiếu private key — đặt data/.license-private.pem hoặc env MUSE_LICENSE_PRIVATE');
   const payload = Buffer.from(
     JSON.stringify({ e: String(email || '').trim(), x: expiresAtMs | 0, h: hwid })
   ).toString('base64url');
-  return `${KEY_PREFIX}.${payload}.${signPayload(payload)}`;
+  return `${KEY_PREFIX}.${payload}.${signPayload(payload, priv)}`;
 }
 
 export interface KeyCheck {
@@ -106,12 +144,12 @@ export function checkKey(key: string): KeyCheck {
   } catch {
     return fail('Payload key không giải mã được');
   }
-  const expected = signPayload(parts[1]);
-  const got = parts[2];
-  const sigOk =
-    expected.length === got.length &&
-    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(got));
-  if (!sigOk) return fail('Sai chữ ký — key bị sửa hoặc không do hệ thống này cấp');
+  if (!verifySignature(parts[1], parts[2])) {
+    return fail('Sai chữ ký — key bị sửa hoặc không do hệ thống này cấp');
+  }
+  // Multi-product: 'p' claims which tool this key is for. Absent = legacy muse key.
+  const product = String(p.p || 'muse').toLowerCase();
+  if (product !== 'muse') return fail(`Key này dành cho sản phẩm "${product}", không phải Muse`);
 
   const expiresAtMs = Number(p.x || 0);
   if (expiresAtMs > 0 && expiresAtMs < Date.now()) return fail('License đã hết hạn');
@@ -138,7 +176,10 @@ function writeFile(data: LicenseFile | null): void {
 
 function appVersion(): string {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+    // Under a global npm install, cwd is the data dir — the app itself
+    // (with its real package.json) lives in MUSE_APP_DIR.
+    const appRoot = process.env.MUSE_APP_DIR || process.cwd();
+    const pkg = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
     return String(pkg.version || '0.0.0');
   } catch {
     return '0.0.0';
@@ -209,10 +250,24 @@ class LicenseService {
     writeFile(null);
   }
 
-  /** Mint a key — bound to this machine's HWID when bindHwid is true. */
+  /** Mint a key — bound to this machine's HWID when bindHwid is true.
+   *  VENDOR-side only (needs the private key file/env). */
   generate(email: string, days: number, bindHwid: boolean): string {
     const exp = days > 0 ? Date.now() + days * 86_400_000 : 0;
     return issueKey(email, exp, bindHwid ? computeHwid() : '');
+  }
+
+  /** Fast gate for API routes: true when a stored key verifies (signature
+   *  + expiry + HWID) AND — when a license server is configured — the cached
+   *  vendor-signed online verdict is still fresh. Re-reads license.json each
+   *  call — file is ~1KB and crypto.verify is microseconds. */
+  isLicensed(): boolean {
+    const lic = readFile();
+    if (!lic) return false;
+    if (lic.expiresAt && Date.parse(lic.expiresAt) < Date.now()) return false;
+    if (!checkKey(lic.licenseKey).ok) return false;
+    if (onlineEnabled() && !onlineOk(lic.licenseKey).ok) return false;
+    return true;
   }
 }
 

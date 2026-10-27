@@ -25,10 +25,16 @@ export async function GET() {
     if (dayKey(e.ts) === today) todayReq++;
   }
 
-  const days: { day: string; requests: number }[] = [];
+  const days: { day: string; requests: number; ok: number; avgMs: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dk = dayKey(Date.now() - i * 86400000);
-    days.push({ day: dk.slice(5), requests: history.filter((e) => dayKey(e.ts) === dk).length });
+    const entries = history.filter((e) => dayKey(e.ts) === dk);
+    days.push({
+      day: dk.slice(5),
+      requests: entries.length,
+      ok: entries.filter((e) => e.ok).length,
+      avgMs: entries.length ? Math.round(entries.reduce((s, e) => s + (e.ms || 0), 0) / entries.length) : 0,
+    });
   }
 
   return NextResponse.json({

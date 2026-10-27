@@ -9,6 +9,7 @@ import {
   extractWorkspaceCwd,
   buildProjectContext,
 } from '@/lib/toolBridge';
+import { licenseGate } from '@/lib/licenseGate';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,6 +22,8 @@ export async function OPTIONS() {
 }
 
 export async function POST(req: NextRequest) {
+  const gate = licenseGate(corsHeaders);
+  if (gate) return gate;
   try {
     const apiKey = apiKeyService.resolveKey(
       req.headers.get('authorization') || req.headers.get('x-api-key')

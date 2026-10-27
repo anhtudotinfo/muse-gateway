@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
+import { dataPath } from './dataDir';
 
 // API key management (9router-style): keys live in data/keys.json.
 // When at least one ENABLED key exists, /v1/* requires Bearer auth.
@@ -21,7 +22,7 @@ export interface ApiKeyRecord {
   access?: KeyAccessRule;
 }
 
-const KEYS_FILE = path.join(process.cwd(), 'data', 'keys.json');
+const KEYS_FILE = dataPath('keys.json');
 
 class ApiKeyService {
   private keys: ApiKeyRecord[] = [];

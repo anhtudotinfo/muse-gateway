@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
+import { dataPath } from './dataDir';
 
 // App-level settings persisted to data/settings.json.
 // `hasPassword` reports whether the dashboard still uses an insecure default
@@ -14,9 +15,12 @@ export interface AppSettings {
   keepAliveEnabled: boolean;
   keepAliveMin: number;
   maskEmails: boolean;
+  /** Periodically re-test accounts sitting in cooldown and pull them back
+   *  into the pool early when their session turns out to be alive. */
+  autoHealEnabled: boolean;
 }
 
-const SETTINGS_FILE = path.join(process.cwd(), 'data', 'settings.json');
+const SETTINGS_FILE = dataPath('settings.json');
 
 const DEFAULTS: AppSettings = {
   requireLogin: true,
@@ -25,6 +29,7 @@ const DEFAULTS: AppSettings = {
   keepAliveEnabled: false,
   keepAliveMin: 30,
   maskEmails: false,
+  autoHealEnabled: true,
 };
 
 class SettingsService {
@@ -52,7 +57,7 @@ class SettingsService {
 
   patch(patch: Partial<AppSettings>): AppSettings {
     this.load();
-    for (const key of ['requireLogin', 'hasPassword', 'tunnelDashboardAccess', 'keepAliveEnabled', 'maskEmails'] as const) {
+    for (const key of ['requireLogin', 'hasPassword', 'tunnelDashboardAccess', 'keepAliveEnabled', 'maskEmails', 'autoHealEnabled'] as const) {
       if (typeof patch[key] === 'boolean') this.settings[key] = patch[key];
     }
     if (typeof patch.keepAliveMin === 'number' && patch.keepAliveMin >= 1 && patch.keepAliveMin <= 1440) {

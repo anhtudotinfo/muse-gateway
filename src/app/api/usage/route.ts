@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { NextResponse } from 'next/server';
 import { musePool, type UsageEntry } from '@/lib/musePool';
+import { dataPath } from '@/lib/dataDir';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -109,12 +110,29 @@ export async function GET(req: Request) {
   const recent: UsageEntry[] = [...history].reverse().slice(0, 50);
   const mem = musePool.getUsage();
 
-  // Media files generated so far (data/media) — "File Media đã tạo" stat.
+  // Media files generated so far (data/media) — "File Media đã tạo" stat,
+  // plus a per-day count (by file mtime) for the overview sparkline.
   let mediaFiles = 0;
+  const mediaByDay = new Map<string, number>();
   try {
-    const dir = path.join(process.cwd(), 'data', 'media');
-    if (fs.existsSync(dir)) mediaFiles = fs.readdirSync(dir).filter((f) => !f.startsWith('.')).length;
+    const dir = dataPath('media');
+    if (fs.existsSync(dir)) {
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith('.')) continue;
+        mediaFiles++;
+        try {
+          const mt = fs.statSync(path.join(dir, f)).mtimeMs;
+          const dk = dayKey(mt);
+          mediaByDay.set(dk, (mediaByDay.get(dk) || 0) + 1);
+        } catch {}
+      }
+    }
   } catch {}
+  const mediaDays: { day: string; count: number }[] = [];
+  for (let i = 13; i >= 0; i--) {
+    const dk = dayKey(now - i * 86400000);
+    mediaDays.push({ day: dk.slice(5), count: mediaByDay.get(dk) || 0 });
+  }
 
   return NextResponse.json({
     range,
@@ -123,6 +141,7 @@ export async function GET(req: Request) {
     days,
     graph,
     mediaFiles,
+    mediaDays,
     recent: recent.length ? recent : mem.recent.slice(0, 50),
   });
 }

@@ -12,6 +12,10 @@ export interface Profile {
   lastTested?: string | null;
   /** Last liveness result — 'valid' = cookie still works. */
   lastStatus?: 'valid' | 'invalid' | null;
+  /** Optional egress proxy for this account's browser session —
+   *  e.g. "http://user:pass@host:8080" or "socks5://host:1080".
+   *  Accounts sharing the same proxy reuse one headless browser. */
+  proxy?: string | null;
 }
 
 export interface BrowserDetection {

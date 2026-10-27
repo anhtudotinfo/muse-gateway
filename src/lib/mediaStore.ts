@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import { dataPath } from './dataDir';
 
 // Media retention for data/media/. Two kinds of files live there:
 //   media-*  — generated results served back to clients via /api/media/*
 //   frame-*  — temp uploads decoded from data: URLs for Puppeteer file inputs
 // Without a sweep the dir grows unbounded (videos are 10–20MB each).
 
-export const MEDIA_DIR = path.join(process.cwd(), 'data', 'media');
+export const MEDIA_DIR = dataPath('media');
 
 // Tunable via env for deployments (e.g. selling API access — media is an
 // ephemeral download link, not a storage service):

@@ -4,12 +4,13 @@ import path from 'path';
 import os from 'os';
 import https from 'https';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
+import { dataDir } from './dataDir';
 
 // Tunnel manager: Cloudflare quick tunnel (cloudflared) + Tailscale funnel.
 // State persists in data/tunnel.json so "enabled" intent survives restarts;
 // the running processes live on the globalThis singleton (survives HMR).
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = dataDir();
 const STATE_FILE = path.join(DATA_DIR, 'tunnel.json');
 const BIN_DIR = path.join(DATA_DIR, 'bin');
 const IS_WIN = process.platform === 'win32';
