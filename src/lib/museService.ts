@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import https from 'https';
 import puppeteer from 'puppeteer-core';
+import { spawnSync } from 'child_process';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { dataDir } from './dataDir';
 import type { CookieMap, Profile, SessionTestResult, BrowserDetection } from '@/types';
@@ -201,6 +202,40 @@ export function testSessionOnline(cookieHeader: string): Promise<SessionTestResu
   });
 }
 
+/** Kill browser processes still bound to a userDataDir — a previous
+ * session window left open (or a zombie after a gateway restart) holds
+ * the profile's SingletonLock and every next launch on that dir fails. */
+function killProfileBrowsers(userDataDir: string): void {
+  const base = path.basename(userDataDir);
+  if (!base) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match '${base.replace(/'/g, "''")}' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      ], { windowsHide: true, timeout: 10000 });
+    } else {
+      spawnSync('pkill', ['-f', base], { timeout: 8000 });
+    }
+  } catch {}
+}
+
+/** puppeteer.launch with one recovery retry: if the profile dir is locked
+ * by a leftover browser, kill it and launch again instead of erroring. */
+async function launchWithProfileRetry(
+  opts: Parameters<typeof puppeteer.launch>[0],
+): Promise<import('puppeteer-core').Browser> {
+  try {
+    return await puppeteer.launch(opts);
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (!/already running|userDataDir|ProcessSingleton|profile directory/i.test(msg)) throw err;
+    killProfileBrowsers(String(opts?.userDataDir || ''));
+    await new Promise((r) => setTimeout(r, 800));
+    return await puppeteer.launch(opts);
+  }
+}
+
 // Launch browser with injected cookies
 export async function launchBrowserWithCookies(cookies: string, browserType: string = 'chrome') {
   const browserInfo = getBrowserExecutable(browserType);
@@ -211,7 +246,7 @@ export async function launchBrowserWithCookies(cookies: string, browserType: str
   const cookieMap = parseCookieString(cookies);
   const puppeteerCookies = formatCookiesForPuppeteer(cookieMap);
 
-  const browser = await puppeteer.launch({
+  const browser = await launchWithProfileRetry({
     executablePath: browserInfo.path,
     headless: false,
     defaultViewport: null,
@@ -431,7 +466,7 @@ async function runLoginCapture(
 ): Promise<void> {
   let browser: import('puppeteer-core').Browser | null = null;
   try {
-    browser = await puppeteer.launch({
+    browser = await launchWithProfileRetry({
       executablePath: browserInfo.path,
       headless: false,
       defaultViewport: null,
