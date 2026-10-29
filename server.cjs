@@ -6,7 +6,7 @@ const https = require('https');
 const puppeteer = require('puppeteer-core');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.MUSE_PORT || process.env.PORT || 1412;
 const DATA_DIR = path.join(__dirname, 'data');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const USER_DATA_DIR = path.join(__dirname, '.browser-profile');

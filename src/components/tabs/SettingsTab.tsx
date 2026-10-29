@@ -38,7 +38,7 @@ export function SettingsTab() {
         <div className="api-param-row">
           <div className="param-meta">
             <span className="param-tag">BASE URL</span>
-            <span className="param-value">{cfg?.baseUrl || 'http://localhost:3000/v1'}</span>
+            <span className="param-value">{cfg?.baseUrl || 'http://localhost:1412/v1'}</span>
           </div>
         </div>
         <div className="api-param-row">

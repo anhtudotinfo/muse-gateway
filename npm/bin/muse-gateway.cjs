@@ -25,7 +25,7 @@ const APP_DIR = path.join(PKG_ROOT, 'app');
 const DATA_DIR = path.join(os.homedir(), '.muse-gateway');
 const PID_FILE = path.join(DATA_DIR, 'muse-gateway.pid');
 const LOG_FILE = path.join(DATA_DIR, 'server.log');
-const PORT = process.env.PORT || '3000';
+const PORT = process.env.MUSE_PORT || process.env.PORT || '1412';
 const BASE = `http://localhost:${PORT}`;
 const REG_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const REG_NAME = 'MuseGateway';
@@ -353,6 +353,7 @@ async function interactiveMenu() {
       : C.dim('○ stopped');
     lines.push(C.bold(`  Muse Gateway  v${PKG_VERSION}`));
     lines.push(`  Server:  ${C.cyan(BASE)}   ${statusText}`);
+    if (status && !status.licensed) lines.push(`  ${C.yellow('Mua key:')} ${C.cyan('https://www.storetiki.online')}`);
     lines.push(C.cyan(bar));
     items.forEach((it, i) => {
       lines.push(i === sel ? C.cyan(`> ${it.label}`) : `  ${it.label}`);
@@ -513,7 +514,7 @@ if (flag('--help') || flag('-h')) {
   muse-gateway --serve    chạy server ở foreground (dùng nội bộ)
   muse-gateway stop       dừng instance đang chạy nền
   muse-gateway --open     mở dashboard
-  PORT=xxxx muse-gateway  đổi port (mặc định 3000)
+  MUSE_PORT=xxxx muse-gateway  đổi port (mặc định 1412)
 
 Data:  ${DATA_DIR}
 Log:   ${LOG_FILE}`);

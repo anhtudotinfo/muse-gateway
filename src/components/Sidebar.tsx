@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { UpdateInfo } from '@/components/UpdateBanner';
 
 export type TabKey =
   | 'overview'
@@ -44,9 +45,10 @@ const NAV: { key: TabKey; label: string; href: string; section?: string }[] = [
 
 interface SidebarProps {
   profileCount: number;
+  update?: UpdateInfo | null;
 }
 
-export function Sidebar({ profileCount }: SidebarProps) {
+export function Sidebar({ profileCount, update }: SidebarProps) {
   const pathname = usePathname();
   return (
     <aside className="router-sidebar">
@@ -79,7 +81,25 @@ export function Sidebar({ profileCount }: SidebarProps) {
 
       <div className="router-sidebar-footer">
         <span className="status-dot" />
-        localhost:3000 · /v1 ready
+        localhost:1412{update?.current ? ` · v${update.current}` : ' · /v1 ready'}
+        {update?.updateAvailable && update.latest && (
+          <span
+            title={`Bản mới v${update.latest} — chạy: npm i -g muse-gateway`}
+            style={{
+              marginLeft: 6,
+              padding: '1px 7px',
+              borderRadius: 999,
+              fontSize: 10.5,
+              fontWeight: 600,
+              color: '#ff9f0a',
+              background: 'rgba(255,159,10,0.14)',
+              border: '1px solid rgba(255,159,10,0.35)',
+              cursor: 'default',
+            }}
+          >
+            ↑ v{update.latest}
+          </span>
+        )}
       </div>
     </aside>
   );

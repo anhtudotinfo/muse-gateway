@@ -15,7 +15,7 @@ interface ToolsTabProps {
 
 const CODEX_TOML = `[model_providers.muse]
 name = "Muse Pool"
-base_url = "http://localhost:3000/v1"
+base_url = "http://localhost:1412/v1"
 wire_api = "responses"
 
 model_provider = "muse"

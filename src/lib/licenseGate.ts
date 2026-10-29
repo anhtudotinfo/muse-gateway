@@ -116,7 +116,7 @@ export function licenseGate(corsHeaders: Record<string, string>): NextResponse |
     {
       error: {
         message:
-          'License required — chưa kích hoạt bản quyền. Mở tab Bản quyền trên dashboard, nhập key rồi bấm Kích hoạt.',
+          'License required — chưa kích hoạt bản quyền. Mua license key tại https://www.storetiki.online (hỗ trợ: Telegram @ministoretiki_bbqqvv_bot) rồi nhập key ở tab Bản quyền trên dashboard.',
         type: 'license_error',
         code: 'license_required',
       },

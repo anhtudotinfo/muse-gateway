@@ -75,7 +75,7 @@ print(resp.choices[0].message.content)
 interface KeySnippetModalProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Base URL ending in /v1 — e.g. http://localhost:3000/v1 */
+  /** Base URL ending in /v1 — e.g. http://localhost:1412/v1 */
   baseUrl: string;
   keyId: string;
   keyName: string;

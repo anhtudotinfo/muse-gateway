@@ -2,7 +2,7 @@ export const TUNNEL_BENEFITS = [
   { icon: "public", title: "Access Anywhere", desc: "Use your API from any network" },
   { icon: "group", title: "Share Endpoint", desc: "Share URL with team members" },
   { icon: "code", title: "Use in Cursor/Cline", desc: "Connect AI tools remotely" },
-  { icon: "lock", title: "Encrypted", desc: "End-to-end TLS via Cloudflare" },
+  { icon: "lock", title: "Encrypted", desc: "End-to-end TLS encryption" },
 ] as const;
 
 export const TUNNEL_PING_INTERVAL_MS = 2000;
@@ -13,3 +13,6 @@ export const REACHABLE_MISS_THRESHOLD = 5;
 export const CLIENT_PING_FAST_MS = 10000;
 export const CLIENT_PING_SLOW_MS = 60000;
 export const CLIENT_PING_TIMEOUT_MS = 5000;
+// After this long unreachable, stop showing an endless "checking…" spinner and
+// surface a diagnosable error (bad token, wrong hostname, dead cloudflared…).
+export const UNREACHABLE_FAIL_MS = 60000;

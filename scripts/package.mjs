@@ -65,6 +65,18 @@ const distNm = path.join(dist, 'node_modules');
 if (fs.existsSync(distNm)) {
   stripMaps(distNm);
   console.log(`  stripped ${stripped} source maps from node_modules`);
+  // sharp ships binaries for every platform under @img — the package is
+  // Windows-only so anything that isn't the win32-x64 build is dead weight
+  // (~7MB). @img/colour is a tiny JS lib used by sharp — keep it.
+  const imgDir = path.join(distNm, '@img');
+  if (fs.existsSync(imgDir)) {
+    for (const e of fs.readdirSync(imgDir)) {
+      if (e.startsWith('sharp-') && e !== 'sharp-win32-x64') {
+        fs.rmSync(path.join(imgDir, e), { recursive: true, force: true });
+        console.log(`  removed @img/${e} (non-Windows sharp binary)`);
+      }
+    }
+  }
 }
 
 // ── 2. SEA launcher ───────────────────────────────────────────────────────
@@ -77,7 +89,7 @@ const fs = require('fs');
 const { spawn, execSync } = require('child_process');
 const dir = path.dirname(process.execPath);
 process.chdir(dir);
-process.env.PORT = process.env.PORT || '3000';
+process.env.PORT = process.env.MUSE_PORT || process.env.PORT || '1412';
 process.env.NODE_ENV = 'production';
 process.env.MUSE_PACKED = '1';
 process.env.MUSE_APP_DIR = dir;
@@ -360,15 +372,16 @@ fs.rmSync(iconPsm, { force: true });
 // ── 5. Convenience launcher for end users ─────────────────────────────────
 fs.writeFileSync(
   path.join(dist, 'CHAY.bat'),
-  `@echo off\r\ntitle Muse Gateway\r\nstart "" "%~dp0muse-gateway.exe"\r\ntimeout /t 4 /nobreak >nul\r\nstart "" "http://localhost:3000"\r\n`
+  `@echo off\r\ntitle Muse Gateway\r\nstart "" "%~dp0muse-gateway.exe"\r\ntimeout /t 4 /nobreak >nul\r\nstart "" "http://localhost:1412"\r\n`
 );
 fs.writeFileSync(
   path.join(dist, 'README.txt'),
   [
     'Muse Gateway — ban dong goi',
     '',
-    '1. Chay CHAY.bat (hoac double-click muse-gateway.exe roi mo http://localhost:3000)',
+    '1. Chay CHAY.bat (hoac double-click muse-gateway.exe roi mo http://localhost:1412)',
     '2. Vao tab "Ban quyen", nhap license key de mo khoa API /v1/*',
+    '   Mua key: https://www.storetiki.online — ho tro: Telegram @ministoretiki_bbqqvv_bot',
     '3. Tab Accounts -> them tai khoan Muse -> gateway san sang phuc vu',
     '',
     'Thu muc data/ duoc tao canh exe: chua session, license, API key.',

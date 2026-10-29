@@ -425,13 +425,24 @@ export function UsageTab() {
           className="w-full sm:w-auto"
         />
         {activeTab === "overview" && (
-          <SegmentedControl
-            options={USAGE_PERIODS}
-            value={period}
-            onChange={setPeriod}
-            size="sm"
-            className="w-full sm:w-auto"
-          />
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <SegmentedControl
+              options={USAGE_PERIODS}
+              value={period}
+              onChange={setPeriod}
+              size="sm"
+              className="w-full sm:w-auto"
+            />
+            <a
+              href={`/api/usage?range=${period}&format=csv`}
+              download
+              title="Tải lịch sử request dạng CSV"
+              className="apple-tool-btn"
+              style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}
+            >
+              ⬇ CSV
+            </a>
+          </div>
         )}
       </div>
 

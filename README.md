@@ -41,14 +41,14 @@ Hệ thống Next.js tích hợp sẵn máy chủ Gateway chuẩn OpenAI. Bạn 
 
 | Thông số | Giá trị |
 | :--- | :--- |
-| **API Base URL** | `http://localhost:3000/v1` *(hoặc `http://localhost:3000/api/v1`)* |
+| **API Base URL** | `http://localhost:1412/v1` *(hoặc `http://localhost:1412/api/v1`)* |
 | **API Key** | `sk-muse-session` *(hoặc bất kỳ ký tự nào)* |
 | **Model ID** | `muse-chat` *(hoặc alias `gpt-4o`, `claude-3-5-sonnet`, `deepseek-chat`)* |
 
 ### 1. Kết nối với Cherry Studio
 1. Vào **Cài đặt** (Settings) &rarr; **Nhà cung cấp mô hình** (Model Providers).
 2. Chọn nhà cung cấp **OpenAI** (hoặc tạo Custom Provider).
-3. Điền **API Base URL**: `http://localhost:3000/v1`
+3. Điền **API Base URL**: `http://localhost:1412/v1`
 4. Điền **API Key**: `sk-muse-session`
 5. Thêm mã mô hình: `muse-chat`
 6. Bấm kiểm tra kết nối & bắt đầu trò chuyện.
@@ -56,13 +56,13 @@ Hệ thống Next.js tích hợp sẵn máy chủ Gateway chuẩn OpenAI. Bạn 
 ### 2. Kết nối với Chatbox AI
 1. Mở Chatbox &rarr; **Cài đặt** (Settings).
 2. Tại mục **AI Model Provider**, chọn **OpenAI API**.
-3. **API Host**: Nhập `http://localhost:3000` *(Chatbox sẽ tự động thêm `/v1/chat/completions`)*.
+3. **API Host**: Nhập `http://localhost:1412` *(Chatbox sẽ tự động thêm `/v1/chat/completions`)*.
 4. **API Key**: `sk-muse-session`.
 5. **Model**: Chọn tùy chỉnh và nhập `muse-chat`.
 
 ### 3. Gọi trực tiếp bằng cURL
 ```bash
-curl -X POST http://localhost:3000/v1/chat/completions \
+curl -X POST http://localhost:1412/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-muse-session" \
   -d '{
@@ -77,7 +77,7 @@ curl -X POST http://localhost:3000/v1/chat/completions \
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:3000/v1",
+    base_url="http://localhost:1412/v1",
     api_key="sk-muse-session"
 )
 
@@ -112,14 +112,14 @@ npm start
 npm run server
 ```
 
-👉 Mở trình duyệt và truy cập: **[http://localhost:3000](http://localhost:3000)**
+👉 Mở trình duyệt và truy cập: **[http://localhost:1412](http://localhost:1412)**
 
 ---
 
 ## 🎯 3 Cách Sử Dụng Tiện Lợi
 
 ### Cách 1: Sử dụng trực tiếp từ Web Dashboard Next.js (Khuyên dùng)
-1. Mở `http://localhost:3000`.
+1. Mở `http://localhost:1412`.
 2. Dán chuỗi cookie của bạn vào ô văn bản (tool đã tự động nạp sẵn tài khoản của bạn).
 3. Bấm **"⚡ Kiểm Tra Trạng Thái VM"** để kiểm tra session.
 4. Bấm **"🚀 Mở Muse Web Ngay"** &mdash; Chrome/Edge sẽ tự động mở lên với tài khoản đã đăng nhập!

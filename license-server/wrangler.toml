@@ -11,6 +11,16 @@ id = "5098dd5ab1924d8e8f167eafbc16c359"
 #   MUSE_LICENSE_PRIVATE  — contents of data/.license-private.pem
 #   MUSE_LICENSE_PUBLIC   — the public PEM (same one embedded in the app)
 #   MUSE_ADMIN_TOKEN      — admin auth for /revoke /unbind /admin/list
-# vars:
+#   CF_API_TOKEN          — tunnel provisioning: Account→Cloudflare Tunnel:Edit
+#                           + Zone→DNS:Edit scoped to the TUNNEL_DOMAIN zone
+#   CF_ACCOUNT_ID         — account owning the zone
+#   CF_ZONE_ID            — zone id of the TUNNEL_DOMAIN parent
+[vars]
+# Tunnel provisioning domain — customers get u-<keyId>.storetiki.online.
+# Must stay single-level under the zone: Universal SSL covers *.storetiki.online
+# only — u-x.gw.storetiki.online (multi-level) fails TLS handshake at the edge.
+TUNNEL_DOMAIN = "storetiki.online"
+# Optional override (default shown):
 #   VERDICT_TTL_H = "24"   (default 24h offline grace)
 #   MAX_HWIDS     = "1"    (seats per floating key)
+#   TUNNEL_TARGET = "http://localhost:1412"

@@ -39,6 +39,38 @@ export async function GET(req: Request) {
   const all = musePool.getUsageHistory(5000);
   const history = all.filter((e) => e.ts >= since);
 
+  // ?format=csv — raw per-request export for the selected range.
+  if (searchParams.get('format') === 'csv') {
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = history.map((e) =>
+      [
+        new Date(e.ts).toISOString(),
+        e.accountName,
+        e.model || '',
+        e.endpoint || '',
+        e.keyName || '',
+        clientName(e.ua),
+        e.ok ? 'ok' : 'failed',
+        e.ms ?? '',
+        e.promptChars ?? '',
+        e.replyChars ?? '',
+        (e.error || '').replace(/\s+/g, ' ').slice(0, 200),
+      ]
+        .map(esc)
+        .join(',')
+    );
+    const csv = [
+      'time,account,model,endpoint,key,client,status,ms,prompt_chars,reply_chars,error',
+      ...rows,
+    ].join('\n');
+    return new NextResponse(csv, {
+      headers: {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="muse-usage-${range}.csv"`,
+      },
+    });
+  }
+
   const totals = {
     requests: history.length,
     ok: 0,

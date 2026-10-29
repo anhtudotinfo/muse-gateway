@@ -1,0 +1,54 @@
+# Publish muse-gateway to npmjs.com via Trusted Publishing (OIDC).
+#
+# No npm token needed — GitHub's OIDC identity replaces _authToken entirely,
+# and npm skips the staged-publishing / 2FA friction for trusted publishers.
+#
+# One-time setup (manual, ~5 min):
+#   1. Push this repo to GitHub (the org/user must match step 2).
+#   2. npmjs.com → package muse-gateway → Settings → Publishing Access →
+#      "Configure a Trusted Publisher" → GitHub Actions →
+#      Repository owner: <you> · Repository: muse-router ·
+#      Workflow filename: publish.yml
+#   3. Tag a release:  git tag v1.0.1 && git push origin v1.0.1
+#      (or run the workflow manually from the Actions tab)
+#
+# The package version is read from npm/package.json — bump it before tagging.
+
+name: Publish to npm
+
+on:
+  workflow_dispatch:        # run manually from the Actions tab
+  push:
+    tags: ['v*']            # or tag a release: v1.0.1 → publishes that version
+
+permissions:
+  id-token: write           # required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest # package.mjs builds the Windows SEA launcher
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build + package (produces dist/npm/muse-gateway + tgz)
+        run: node scripts/package.mjs
+
+      - name: Publish to npm
+        working-directory: dist/npm/muse-gateway
+        run: npm publish --access public
+        # No NODE_AUTH_TOKEN needed — trusted publishing uses the job's OIDC.
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muse-gateway-tgz
+          path: dist/*.tgz

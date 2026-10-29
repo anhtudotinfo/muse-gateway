@@ -1,6 +1,9 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import Modal from '@/components/endpoint/ui/Modal';
+import Button from '@/components/endpoint/ui/Button';
 
 interface OverviewData {
   strategy: string;
@@ -44,11 +47,59 @@ function Sparkline({ values, color, height = 26 }: { values: number[]; color: st
   );
 }
 
+const GUIDE_DISMISSED_KEY = 'muse_guide_dismissed';
+
+const GUIDE_STEPS: { icon: string; title: string; desc: React.ReactNode }[] = [
+  {
+    icon: 'person_add',
+    title: 'Thêm tài khoản Muse',
+    desc: (
+      <>
+        Vào tab <b>Accounts</b> — dán cookies tài khoản đầu tiên bằng bookmarklet hoặc browser extension.
+      </>
+    ),
+  },
+  {
+    icon: 'key',
+    title: 'Kích hoạt license',
+    desc: (
+      <>
+        Vào tab <b>Bản quyền</b> — nhập license key để mở Gateway API <code>/v1/*</code> và cấp tunnel URL riêng.
+      </>
+    ),
+  },
+  {
+    icon: 'vpn_key',
+    title: 'Tạo API key & trỏ client',
+    desc: (
+      <>
+        Mục <b>API Keys</b> trên trang Overview — tạo key rồi trỏ client vào{' '}
+        <code>http://localhost:1412/v1</code>.
+      </>
+    ),
+  },
+];
+
 export function OverviewTab() {
+  const router = useRouter();
   const [ov, setOv] = useState<OverviewData | null>(null);
   const [totals, setTotals] = useState<UsageTotals | null>(null);
   const [media, setMedia] = useState<{ total: number; days: number[] } | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+
+  const dismissGuide = useCallback(() => {
+    try { localStorage.setItem(GUIDE_DISMISSED_KEY, '1'); } catch {}
+    setShowGuide(false);
+  }, []);
+
+  // First-run: auto-open the welcome guide once, until an account exists.
+  useEffect(() => {
+    if (!ov || ov.accounts.total !== 0) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(GUIDE_DISMISSED_KEY) === '1'; } catch {}
+    if (!dismissed) setShowGuide(true);
+  }, [ov]);
 
   const refresh = useCallback(async () => {
     try {
@@ -109,8 +160,46 @@ export function OverviewTab() {
     <div className="tab-surface">
       <div className="tab-top-caption">
         <span className="caption-text">Tổng quan hệ thống — tự cập nhật mỗi 5s.</span>
+        <button type="button" className="apple-tool-btn" onClick={() => setShowGuide(true)}>Hướng dẫn</button>
         <button type="button" className="apple-tool-btn" onClick={refresh}>Làm mới</button>
       </div>
+
+      <Modal
+        isOpen={showGuide}
+        onClose={dismissGuide}
+        title="Bắt đầu với Muse Gateway"
+        size="md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={dismissGuide}>Để sau</Button>
+            <Button onClick={() => { dismissGuide(); router.push('/accounts'); }}>Bắt đầu ngay</Button>
+          </>
+        }
+      >
+        <p className="text-text-muted" style={{ marginTop: 0 }}>
+          3 bước để gateway sẵn sàng nhận request — làm lần lượt từ trên xuống.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 16 }}>
+          {GUIDE_STEPS.map((s, i) => (
+            <div key={s.icon} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <span
+                style={{
+                  width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'rgba(10,132,255,0.12)', color: '#0a84ff',
+                  fontSize: 12, fontWeight: 700,
+                }}
+              >
+                {i + 1}
+              </span>
+              <div style={{ fontSize: 13, lineHeight: 1.55 }}>
+                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{s.title}</div>
+                <div style={{ color: 'var(--text-secondary)' }}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       <div className="ov-tiles">
         {tiles.map((t) => (

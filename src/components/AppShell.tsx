@@ -16,6 +16,7 @@ import type { Profile, BrowserDetection, CookieMap } from '@/types';
 import { useToast } from '@/hooks/useToast';
 import { useCookieParser } from '@/hooks/useCookieParser';
 import { Sidebar } from '@/components/Sidebar';
+import { UpdateBanner, type UpdateInfo } from '@/components/UpdateBanner';
 import { AppleToastStage } from '@/components/AppleToastStage';
 
 interface AppContextValue {
@@ -67,6 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [availableBrowsers, setAvailableBrowsers] = useState<BrowserDetection>({ chrome: null, edge: null });
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [maskEmails, setMaskEmailsState] = useState(false);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
   const setMaskEmails = useCallback((v: boolean) => {
     setMaskEmailsState(v);
@@ -102,6 +104,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     fetch('/api/settings')
       .then((r) => r.json())
       .then((s) => setMaskEmailsState(!!s.maskEmails))
+      .catch(() => {});
+
+    fetch('/api/update')
+      .then((r) => r.json())
+      .then((u) => setUpdate(u))
       .catch(() => {});
 
     reloadProfiles().then((list) => {
@@ -197,7 +204,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={ctx}>
       <AppleToastStage toasts={toasts} />
       <div className="router-shell">
-        <Sidebar profileCount={profiles.length} />
+        <Sidebar profileCount={profiles.length} update={update} />
         <main className="router-main">
           <header className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
             <div>
@@ -214,6 +221,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {maskEmails ? '◐ Ẩn email: Bật' : '○ Ẩn email: Tắt'}
             </button>
           </header>
+          <UpdateBanner info={update} />
           {children}
         </main>
       </div>

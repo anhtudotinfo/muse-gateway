@@ -21,6 +21,7 @@ import {
   STATUS_POLL_FAST_MS,
   REACHABLE_MISS_THRESHOLD,
   CLIENT_PING_FAST_MS,
+  UNREACHABLE_FAIL_MS,
 } from '@/components/endpoint/endpointConstants';
 import { clientPingUrl, clientPingAny } from '@/components/endpoint/endpointPing';
 import EndpointRow from '@/components/endpoint/EndpointRow';
@@ -119,6 +120,10 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   const tsEverReachableRef = useRef(false);
   const [tunnelEverReachable, setTunnelEverReachable] = useState(false);
   const [tsEverReachable, setTsEverReachable] = useState(false);
+  // When the unreachable streak began — drives the check→failed UI deadline.
+  const tunnelDownSinceRef = useRef<number | null>(null);
+  const tsDownSinceRef = useRef<number | null>(null);
+  const [, setCheckTick] = useState(0);
 
   // API key visibility toggle state
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
@@ -187,18 +192,20 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
       if (tunnelEnabled && (tunnelUrl || tunnelPublicUrl)) {
         const ok = await clientPingAny(tunnelPublicUrl, tunnelUrl);
         tunnelClientReachableRef.current = ok;
-        if (ok) { tunnelMissRef.current = 0; setTunnelReachable(true); if (!tunnelEverReachableRef.current) { tunnelEverReachableRef.current = true; setTunnelEverReachable(true); } }
-        else { tunnelMissRef.current += 1; if (tunnelMissRef.current >= REACHABLE_MISS_THRESHOLD) setTunnelReachable(false); }
+        if (ok) { tunnelMissRef.current = 0; tunnelDownSinceRef.current = null; setTunnelReachable(true); if (!tunnelEverReachableRef.current) { tunnelEverReachableRef.current = true; setTunnelEverReachable(true); } }
+        else { tunnelMissRef.current += 1; if (tunnelMissRef.current >= REACHABLE_MISS_THRESHOLD) { if (tunnelDownSinceRef.current == null) tunnelDownSinceRef.current = Date.now(); setTunnelReachable(false); } }
       } else {
         tunnelClientReachableRef.current = false;
+        if (tunnelEnabled && tunnelDownSinceRef.current == null) tunnelDownSinceRef.current = Date.now();
       }
       if (tsEnabled && tsUrl) {
         const ok = await clientPingUrl(tsUrl);
         tsClientReachableRef.current = ok;
-        if (ok) { tsMissRef.current = 0; setTsReachable(true); if (!tsEverReachableRef.current) { tsEverReachableRef.current = true; setTsEverReachable(true); } }
-        else { tsMissRef.current += 1; if (tsMissRef.current >= REACHABLE_MISS_THRESHOLD) setTsReachable(false); }
+        if (ok) { tsMissRef.current = 0; tsDownSinceRef.current = null; setTsReachable(true); if (!tsEverReachableRef.current) { tsEverReachableRef.current = true; setTsEverReachable(true); } }
+        else { tsMissRef.current += 1; if (tsMissRef.current >= REACHABLE_MISS_THRESHOLD) { if (tsDownSinceRef.current == null) tsDownSinceRef.current = Date.now(); setTsReachable(false); } }
       } else {
         tsClientReachableRef.current = false;
+        if (tsEnabled && tsDownSinceRef.current == null) tsDownSinceRef.current = Date.now();
       }
     };
     const anyEnabled = (tunnelEnabled && (tunnelUrl || tunnelPublicUrl)) || (tsEnabled && tsUrl);
@@ -210,6 +217,25 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     const id = setInterval(probeBoth, CLIENT_PING_FAST_MS);
     return () => clearInterval(id);
   }, [tunnelEnabled, tunnelUrl, tunnelPublicUrl, tsEnabled, tsUrl, tunnelReachable, tsReachable]);
+
+  // Deadline bookkeeping: clear streaks when tunnels are disabled, and tick a
+  // re-render every 10s while anything is down so the check→failed transition
+  // fires on time instead of spinning "checking…" forever.
+  useEffect(() => {
+    if (!tunnelEnabled) tunnelDownSinceRef.current = null;
+    if (!tsEnabled) tsDownSinceRef.current = null;
+    const anyDown = (tunnelEnabled && !tunnelReachable) || (tsEnabled && !tsReachable);
+    if (!anyDown) return;
+    const id = setInterval(() => setCheckTick((t) => t + 1), 10000);
+    return () => clearInterval(id);
+  }, [tunnelEnabled, tsEnabled, tunnelReachable, tsReachable]);
+
+  const tunnelTimedOut =
+    tunnelEnabled && !tunnelReachable && tunnelDownSinceRef.current != null &&
+    Date.now() - tunnelDownSinceRef.current > UNREACHABLE_FAIL_MS;
+  const tsTimedOut =
+    tsEnabled && !tsReachable && tsDownSinceRef.current != null &&
+    Date.now() - tsDownSinceRef.current > UNREACHABLE_FAIL_MS;
 
   // Client-side reachable only (server no longer probes; watchdog handles backend health).
   // Miss-debounce: only flip to false after N consecutive misses.
@@ -391,7 +417,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     return false;
   };
 
-  const handleEnableTunnel = async () => {
+  const startTunnel = async (overrides?: { token?: string; publicUrl?: string }) => {
     setShowEnableTunnelModal(false);
     setTunnelLoading(true);
     setTunnelStatus(null);
@@ -418,12 +444,13 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     pollProgress();
 
     try {
-      const token = namedToken.trim();
+      const token = (overrides?.token ?? namedToken).trim();
+      const publicUrl = (overrides?.publicUrl ?? namedPublicUrl).trim();
       const res = await fetch('/api/tunnel/enable', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          token ? { token, publicUrl: namedPublicUrl.trim() } : {}
+          token ? { token, publicUrl } : {}
         ),
       });
       polling = false;
@@ -450,6 +477,50 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
       setTunnelProgress('');
     }
   };
+
+  // Vendor-branded URL: the license server provisions a named tunnel
+  // (u-<keyId>.<vendor domain>) for this license and hands back the
+  // connector token + public hostname — no Cloudflare account needed.
+  const [provisioning, setProvisioning] = useState(false);
+  const [licensed, setLicensed] = useState<boolean | null>(null);
+  const [showAdvTunnel, setShowAdvTunnel] = useState(false);
+  useEffect(() => {
+    fetch('/api/license')
+      .then((r) => r.json())
+      .then((j) => setLicensed(Boolean(j?.licensed)))
+      .catch(() => setLicensed(false));
+  }, []);
+
+  const handleProvisionTunnel = async (): Promise<{ token: string; publicUrl: string } | null> => {
+    setProvisioning(true);
+    setTunnelStatus(null);
+    try {
+      const res = await fetch('/api/tunnel/provision', { method: 'POST' });
+      const data = await safeJson(res);
+      if (!res.ok || !data.tunnelToken) {
+        setTunnelStatus({ type: 'error', message: (data.error as string) || `Provision failed (HTTP ${res.status})` });
+        return null;
+      }
+      const out = { token: String(data.tunnelToken), publicUrl: String(data.publicUrl || '') };
+      setNamedToken(out.token);
+      setNamedPublicUrl(out.publicUrl);
+      return out;
+    } catch (error) {
+      setTunnelStatus({ type: 'error', message: (error as Error).message });
+      return null;
+    } finally {
+      setProvisioning(false);
+    }
+  };
+
+  // One-click customer path: provision the per-license tunnel then start it —
+  // token/public URL never touch the form.
+  const handleProvisionAndStart = async () => {
+    const p = await handleProvisionTunnel();
+    if (p) await startTunnel(p);
+  };
+
+  const handleEnableTunnel = async () => startTunnel();
 
   const handleDisableTunnel = async () => {
     setTunnelLoading(true);
@@ -888,9 +959,27 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               </>
             ) : tunnelEnabled && !tunnelLoading && !tunnelReachable ? (
               <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-amber-300 dark:border-amber-800 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  {tunnelEverReachable ? 'Tunnel reconnecting...' : 'Tunnel checking...'}
+                <div className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded border text-sm ${
+                  tunnelTimedOut
+                    ? 'border-red-300 dark:border-red-800 bg-red-500/5 text-red-600 dark:text-red-400'
+                    : 'border-amber-300 dark:border-amber-800 bg-amber-500/5 text-amber-600 dark:text-amber-400'
+                }`}>
+                  {tunnelTimedOut ? (
+                    <>
+                      <span className="material-symbols-outlined text-sm">error</span>
+                      <span className="min-w-0">
+                        {tunnelPublicUrl || tunnelUrl
+                          ? `Không kết nối được ${tunnelPublicUrl || tunnelUrl}`
+                          : 'Tunnel bật nhưng thiếu public URL'}
+                        <span className="opacity-70"> — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                      {tunnelEverReachable ? 'Tunnel reconnecting...' : 'Tunnel checking...'}
+                    </>
+                  )}
                 </div>
                 <button
                   onClick={() => setShowDisableTunnelModal(true)}
@@ -980,9 +1069,25 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               </>
             ) : tsEnabled && !tsLoading && !tsReachable ? (
               <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-amber-300 dark:border-amber-800 bg-amber-500/5 text-sm text-amber-600 dark:text-amber-400">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  {tsEverReachable ? 'Tailscale reconnecting...' : 'Tailscale checking...'}
+                <div className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded border text-sm ${
+                  tsTimedOut
+                    ? 'border-red-300 dark:border-red-800 bg-red-500/5 text-red-600 dark:text-red-400'
+                    : 'border-amber-300 dark:border-amber-800 bg-amber-500/5 text-amber-600 dark:text-amber-400'
+                }`}>
+                  {tsTimedOut ? (
+                    <>
+                      <span className="material-symbols-outlined text-sm">error</span>
+                      <span className="min-w-0">
+                        {tsUrl ? `Không kết nối được ${tsUrl}` : 'Tailscale bật nhưng thiếu URL'}
+                        <span className="opacity-70"> — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+                      {tsEverReachable ? 'Tailscale reconnecting...' : 'Tailscale checking...'}
+                    </>
+                  )}
                 </div>
                 <button
                   onClick={() => setShowDisableTsModal(true)}
@@ -1055,10 +1160,14 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
         {/* Security warnings when tunnel or tailscale is active */}
         {(tunnelEnabled || tsEnabled) && (
           <div className="mt-4 flex flex-col gap-2">
-            {!requireApiKey && (
+            {(!requireApiKey || keys.every((k) => !k.isActive)) && (
               <SecurityWarning
-                message="Require API key is disabled — your endpoint is publicly accessible without authentication."
-                action={{ label: 'Enable', href: '#require-api-key' }}
+                message={
+                  !requireApiKey
+                    ? 'Require API key is disabled — your endpoint is publicly accessible without authentication.'
+                    : 'Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.'
+                }
+                action={{ label: !requireApiKey ? 'Enable' : 'Create key', href: '#require-api-key' }}
               />
             )}
             {(!requireLogin || !hasPassword) && (
@@ -1319,7 +1428,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               <span className="material-symbols-outlined text-primary">cloud_upload</span>
               <div>
                 <p className="text-sm text-text-main font-medium mb-1">
-                  Cloudflare Tunnel
+                  Remote Endpoint
                 </p>
                 <p className="text-sm text-text-muted">
                   Expose your local Muse endpoint to the internet. No port forwarding, no static IP needed. Share endpoint URL with your team or use it in Cursor, Cline, and other AI tools from anywhere.
@@ -1342,42 +1451,82 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
             Requires outbound port 7844 (TCP/UDP). Connection may take 10-30s.
           </p>
 
-          {/* Named tunnel — fixed domain. Paste a tunnel token from
-              Cloudflare Zero Trust → Networks → Tunnels (hostname →
-              http://localhost:<port>). Empty token = random quick URL. */}
-          <div className="border border-border-subtle rounded-lg p-3 flex flex-col gap-3">
-            <p className="text-xs font-semibold text-text-main">
-              Fixed domain (named tunnel) — optional
+          {/* One-click customer path — provisions + starts a fixed per-license
+              URL without ever showing a token field. */}
+          {licensed === false && (
+            <p className="text-xs text-text-muted">
+              Kích hoạt license (tab <b>Bản quyền</b>) để được cấp URL cố định riêng tự động — hoặc dùng URL ngẫu nhiên bên dưới.
             </p>
-            <Input
-              label="Tunnel token"
-              value={namedToken}
-              onChange={(e) => setNamedToken(e.target.value)}
-              placeholder="eyJhIjoi…"
-              hint="Zero Trust → Networks → Tunnels → your tunnel → Install connector → token."
-            />
-            {namedToken.trim() ? (
-              <Input
-                label="Public URL"
-                value={namedPublicUrl}
-                onChange={(e) => setNamedPublicUrl(e.target.value)}
-                placeholder="https://muse.yourdomain.com"
-                hint="The public hostname you pointed at http://localhost:3000 in the tunnel's Public Hostname tab."
-              />
-            ) : null}
-            {namedToken.trim() && !namedPublicUrl.trim() ? (
-              <p className="text-xs text-yellow-600 dark:text-yellow-400">
-                Without the public URL, the dashboard can't display or verify the endpoint — paste the hostname you configured.
-              </p>
-            ) : null}
+          )}
+          <div className="flex flex-col gap-2">
+            {licensed && (
+              <Button
+                onClick={handleProvisionAndStart}
+                fullWidth
+                icon="bolt"
+                disabled={provisioning || tunnelLoading}
+              >
+                {provisioning || tunnelLoading ? 'Đang bật…' : 'Bật — URL riêng theo license'}
+              </Button>
+            )}
+            <div className="flex gap-2">
+              <Button
+                onClick={() => startTunnel()}
+                variant={licensed ? 'secondary' : 'primary'}
+                fullWidth
+                disabled={tunnelLoading}
+              >
+                {tunnelLoading ? 'Đang bật…' : licensed ? 'URL ngẫu nhiên' : 'Start Tunnel'}
+              </Button>
+              <Button onClick={() => setShowEnableTunnelModal(false)} variant="ghost" fullWidth>Cancel</Button>
+            </div>
           </div>
 
-          <div className="flex gap-2">
-            <Button onClick={handleEnableTunnel} fullWidth>
-              {namedToken.trim() ? 'Start Named Tunnel' : 'Start Tunnel'}
-            </Button>
-            <Button onClick={() => setShowEnableTunnelModal(false)} variant="ghost" fullWidth>Cancel</Button>
-          </div>
+          {/* Advanced: manual named-tunnel config — for the vendor's own
+              tunnels (e.g. api-gw) or customers running their own CF account. */}
+          <button
+            type="button"
+            onClick={() => setShowAdvTunnel(!showAdvTunnel)}
+            className="text-xs text-text-muted hover:text-text-main transition-colors self-start"
+          >
+            {showAdvTunnel ? '▾' : '▸'} Tự cấu hình named tunnel (nâng cao)
+          </button>
+          {showAdvTunnel && (
+            <div className="border border-border-subtle rounded-lg p-3 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-text-main">
+                  Fixed domain (named tunnel) — optional
+                </p>
+                <Button size="sm" variant="ghost" icon="bolt" onClick={() => void handleProvisionTunnel()} disabled={provisioning}>
+                  {provisioning ? 'Đang lấy…' : 'Lấy URL theo license'}
+                </Button>
+              </div>
+              <Input
+                label="Tunnel token"
+                value={namedToken}
+                onChange={(e) => setNamedToken(e.target.value)}
+                placeholder="eyJhIjoi…"
+                hint="Zero Trust → Networks → Tunnels → your tunnel → Install connector → token."
+              />
+              {namedToken.trim() ? (
+                <Input
+                  label="Public URL"
+                  value={namedPublicUrl}
+                  onChange={(e) => setNamedPublicUrl(e.target.value)}
+                  placeholder="https://muse.yourdomain.com"
+                  hint="The public hostname you pointed at http://localhost:1412 in the tunnel's Public Hostname tab."
+                />
+              ) : null}
+              {namedToken.trim() && !namedPublicUrl.trim() ? (
+                <p className="text-xs text-yellow-600 dark:text-yellow-400">
+                  Without the public URL, the dashboard can't display or verify the endpoint — paste the hostname you configured.
+                </p>
+              ) : null}
+              <Button onClick={handleEnableTunnel} disabled={!namedToken.trim() || tunnelLoading}>
+                Start Named Tunnel
+              </Button>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -1388,7 +1537,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
         onClose={() => !tunnelLoading && setShowDisableTunnelModal(false)}
       >
         <div className="flex flex-col gap-4">
-          <p className="text-sm text-text-muted">The Cloudflare tunnel will be disconnected. Remote access via tunnel URL will stop working.</p>
+          <p className="text-sm text-text-muted">The tunnel will be disconnected. Remote access via tunnel URL will stop working.</p>
           <div className="flex gap-2">
             <Button onClick={handleDisableTunnel} fullWidth disabled={tunnelLoading} variant="danger">
               {tunnelLoading ? 'Disabling...' : 'Disable'}

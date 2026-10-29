@@ -135,7 +135,7 @@ export function LicenseTab() {
 
   return (
     <div className="tab-surface">
-      <div className="ov-card" style={{ maxWidth: 860 }}>
+      <div className="ov-card" style={{ maxWidth: 860, margin: '0 auto' }}>
         <div className="ov-card-head">
           <div>
             <div className="ov-card-title">Thông tin bản quyền</div>
@@ -190,7 +190,14 @@ export function LicenseTab() {
         )}
 
         <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-tertiary)' }}>
-          Hỗ trợ: <span style={{ color: 'var(--text-secondary)' }}>Telegram</span>
+          Mua key:{' '}
+          <a href="https://www.storetiki.online" target="_blank" rel="noreferrer" style={{ color: 'var(--apple-blue, #0a84ff)' }}>
+            storetiki.online
+          </a>
+          {' '}· Hỗ trợ:{' '}
+          <a href="https://t.me/ministoretiki_bbqqvv_bot" target="_blank" rel="noreferrer" style={{ color: 'var(--text-secondary)' }}>
+            Telegram @ministoretiki_bbqqvv_bot
+          </a>
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -203,6 +210,32 @@ export function LicenseTab() {
             </button>
           )}
         </div>
+
+        {/* Unlicensed notice — tell users the gateway API is locked and where to buy */}
+        {!lic?.licensed && (
+          <div
+            style={{
+              marginTop: 14,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: 'rgba(255,159,10,0.10)',
+              border: '1px solid rgba(255,159,10,0.35)',
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: 'var(--apple-orange, #ff9f0a)',
+            }}
+          >
+            Gateway API <code>/v1/*</code> đang khóa — mọi request trả <code>402 license_required</code>. Mua license key tại{' '}
+            <a href="https://www.storetiki.online" target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>
+              storetiki.online
+            </a>{' '}
+            hoặc nhắn Telegram{' '}
+            <a href="https://t.me/ministoretiki_bbqqvv_bot" target="_blank" rel="noreferrer" style={{ color: 'inherit', fontFamily: 'monospace', textDecoration: 'underline' }}>
+              @ministoretiki_bbqqvv_bot
+            </a>
+            , rồi dán key vào ô bên dưới.
+          </div>
+        )}
 
         {/* Activation — single signed key (email/expiry/HWID embedded) */}
         {!lic?.licensed && (

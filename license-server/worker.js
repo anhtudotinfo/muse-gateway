@@ -159,6 +159,111 @@ async function check(env, body, bind) {
 const json = (code, obj) =>
   new Response(JSON.stringify(obj), { status: code, headers: { 'content-type': 'application/json' } });
 
+// ── named-tunnel provisioning ─────────────────────────────────────────────
+// POST /tunnel/provision {key} — verifies the license signature + record
+// state, then ensures a Cloudflare named tunnel exists for that key under
+// env.TUNNEL_DOMAIN and returns { ok, tunnelToken, publicUrl, hostname } for
+// the gateway dashboard's named-tunnel form.
+//
+// KV 'tun:<keyId>' caches { tunnelId, hostname }; the connector token is
+// fetched fresh from the CF API each call (rotation is harmless). Idempotent
+// per license — one tunnel/hostname per keyId.
+//
+// Worker env needed (wrangler secret put … / [vars]):
+//   CF_API_TOKEN   — API token: Account→Cloudflare Tunnel:Edit + Zone→DNS:Edit
+//                    scoped to the TUNNEL_DOMAIN parent zone
+//   CF_ACCOUNT_ID  — account that owns the zone
+//   CF_ZONE_ID     — zone id of the TUNNEL_DOMAIN parent (e.g. storetiki.online)
+//   TUNNEL_DOMAIN  — e.g. "gw.storetiki.online" (set in [vars])
+//   TUNNEL_TARGET  — optional, default "http://localhost:1412"
+const CF_API = 'https://api.cloudflare.com/client/v4';
+
+async function cf(env, method, path, body) {
+  const res = await fetch(`${CF_API}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${env.CF_API_TOKEN}`, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j.success === false) {
+    const msg = (j.errors && j.errors[0] && j.errors[0].message) || `cf_${res.status}`;
+    throw new Error(msg);
+  }
+  return j.result;
+}
+
+async function provisionTunnel(env, body) {
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID || !env.CF_ZONE_ID || !env.TUNNEL_DOMAIN) {
+    return json(503, { error: 'tunnel provisioning is not configured on this server' });
+  }
+  const parsed = await parseKey(env, body?.key);
+  if (!parsed || !parsed.sigOk) return json(403, { error: 'invalid_signature' });
+  if (parsed.expMs > 0 && Date.now() > parsed.expMs) return json(403, { error: 'license_expired' });
+  const rec = await env.LICENSE_KV.get('key:' + parsed.keyId, 'json');
+  if (rec?.revoked) return json(403, { error: 'license_revoked' });
+
+  const domain = String(env.TUNNEL_DOMAIN).replace(/^\.+|\.+$/g, '').toLowerCase();
+  const hostname = `u-${parsed.keyId}.${domain}`;
+  const target = String(env.TUNNEL_TARGET || 'http://localhost:1412');
+
+  let tun = await env.LICENSE_KV.get('tun:' + parsed.keyId, 'json');
+  if (!tun || tun.hostname !== hostname) {
+    const tunName = `muse-${parsed.keyId}`;
+    let t;
+    try {
+      t = await cf(env, 'POST', `/accounts/${env.CF_ACCOUNT_ID}/cfd_tunnel`, {
+        name: tunName,
+        config_src: 'cloudflare',
+      });
+    } catch (e) {
+      // A previous attempt may have created the tunnel then failed later —
+      // reuse it instead of erroring out (idempotent per key).
+      if (!/already have a tunnel/i.test(String(e?.message || e))) throw e;
+      const list = await cf(
+        env, 'GET',
+        `/accounts/${env.CF_ACCOUNT_ID}/cfd_tunnel?name=${encodeURIComponent(tunName)}&is_deleted=false`
+      );
+      t = Array.isArray(list) && list[0];
+      if (!t) throw e;
+    }
+    tun = { tunnelId: t.id, hostname, createdAt: Date.now() };
+    // Public hostname → customer-local gateway; catch-all 404 after it.
+    await cf(env, 'PUT', `/accounts/${env.CF_ACCOUNT_ID}/cfd_tunnel/${t.id}/configurations`, {
+      config: { ingress: [{ hostname, service: target }, { service: 'http_status:404' }] },
+    });
+    const wantContent = `${tun.tunnelId}.cfargotunnel.com`;
+    try {
+      await cf(env, 'POST', `/zones/${env.CF_ZONE_ID}/dns_records`, {
+        type: 'CNAME',
+        name: hostname,
+        content: wantContent,
+        proxied: true,
+      });
+    } catch (e) {
+      if (!/already exists/i.test(String(e?.message || e))) throw e;
+      // Record exists — repair it if a previous run wrote stale content
+      // (e.g. the t.tunnelId bug produced "undefined.cfargotunnel.com").
+      const recs = await cf(env, 'GET', `/zones/${env.CF_ZONE_ID}/dns_records?name=${encodeURIComponent(hostname)}`);
+      const rec = Array.isArray(recs) && recs[0];
+      if (rec && rec.content !== wantContent) {
+        await cf(env, 'PATCH', `/zones/${env.CF_ZONE_ID}/dns_records/${rec.id}`, {
+          type: 'CNAME', name: hostname, content: wantContent, proxied: true,
+        });
+      }
+    }
+    await env.LICENSE_KV.put('tun:' + parsed.keyId, JSON.stringify(tun));
+  }
+
+  const token = await cf(env, 'GET', `/accounts/${env.CF_ACCOUNT_ID}/cfd_tunnel/${tun.tunnelId}/token`);
+  return json(200, {
+    ok: true,
+    tunnelToken: token,
+    publicUrl: `https://${hostname}`,
+    hostname,
+    email: parsed.email,
+  });
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -167,6 +272,11 @@ export default {
         const body = await request.json().catch(() => ({}));
         const out = await check(env, body, u.pathname === '/activate');
         return json(out.ok ? 200 : 403, out);
+      }
+
+      if (request.method === 'POST' && u.pathname === '/tunnel/provision') {
+        const body = await request.json().catch(() => ({}));
+        return await provisionTunnel(env, body);
       }
 
       const admin = ['/admin/list', '/admin/mint', '/revoke', '/unrevoke', '/unbind'];

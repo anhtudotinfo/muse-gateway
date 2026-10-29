@@ -62,7 +62,7 @@ class TunnelManager {
   }
 
   private port(): number {
-    return Number(process.env.PORT || 3000) || 3000;
+    return Number(process.env.MUSE_PORT || process.env.PORT || 1412) || 1412;
   }
 
   /* ---------------- Cloudflare quick tunnel ---------------- */
@@ -162,7 +162,9 @@ class TunnelManager {
     this.killStrayCloudflared(opts.token);
     const named = !!opts.token;
     const args = named
-      ? ['tunnel', 'run', '--no-autoupdate', '--token', opts.token!]
+      // --no-autoupdate is a tunnel-level flag — placing it after `run`
+      // makes cloudflared exit with "flag provided but not defined".
+      ? ['tunnel', '--no-autoupdate', 'run', '--token', opts.token!]
       : ['tunnel', '--url', `http://localhost:${this.port()}`, '--no-autoupdate'];
     return new Promise((resolve, reject) => {
       const proc = spawn(CF_BIN, args, {
