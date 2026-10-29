@@ -154,6 +154,13 @@ export async function POST(req: NextRequest) {
             });
           };
 
+          // The chat call below can run for minutes while the stream sits
+          // silent — edge proxies cut idle streams (~100s on Cloudflare).
+          // SSE comments keep bytes flowing until real events resume.
+          const keepAlive = setInterval(
+            () => safeEnqueue(encoder.encode(': ka\n\n')),
+            15_000,
+          );
           try {
             sendEvent('response.created', {
               response: {
@@ -205,6 +212,7 @@ export async function POST(req: NextRequest) {
               });
               replyMedia = r.media;
             }
+            clearInterval(keepAlive);
 
             // Generated media links arrive with the completed reply — append
             // them (and stream a final delta) so clients can resolve files.
@@ -310,6 +318,7 @@ export async function POST(req: NextRequest) {
             safeEnqueue(encoder.encode('data: [DONE]\n\n'));
             safeClose();
           } catch (err: any) {
+            clearInterval(keepAlive);
             console.error('[Responses API Stream Error]:', err);
             sendEvent('response.failed', {
               response: {

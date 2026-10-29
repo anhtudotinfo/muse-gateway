@@ -102,6 +102,15 @@ export async function POST(req: NextRequest) {
               controller.close();
             } catch {}
           };
+          // Flush the response immediately — proxies measure their upstream
+          // timeout to first byte. Then keep emitting SSE comments so the
+          // stream never idles while generation runs (a silent stream past
+          // ~100s is cut by Cloudflare's edge even though the work is fine).
+          safeEnqueue(encoder.encode(': open\n\n'));
+          const keepAlive = setInterval(
+            () => safeEnqueue(encoder.encode(': ka\n\n')),
+            15_000,
+          );
           try {
             const { media, threadUrl, accountId } = await musePool.chat({
               prompt: formattedPrompt,
@@ -132,6 +141,7 @@ export async function POST(req: NextRequest) {
                 safeEnqueue(encoder.encode(`data: ${JSON.stringify(ssePayload)}\n\n`));
               },
             });
+            clearInterval(keepAlive);
 
             // Media attachments arrive after the reply completes — emit as a
             // final content delta so streaming clients see the links too.
@@ -167,6 +177,7 @@ export async function POST(req: NextRequest) {
               object: 'chat.completion.chunk',
               created,
               model,
+              muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
               choices: [
                 {
                   index: 0,
@@ -179,6 +190,7 @@ export async function POST(req: NextRequest) {
             safeEnqueue(encoder.encode('data: [DONE]\n\n'));
             safeClose();
           } catch (err: any) {
+            clearInterval(keepAlive);
             console.error('[API Stream Error]:', err);
             const errPayload = {
               error: { message: err?.message || 'Upstream error', type: 'upstream_error' },
