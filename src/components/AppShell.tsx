@@ -18,6 +18,7 @@ import { useCookieParser } from '@/hooks/useCookieParser';
 import { Sidebar } from '@/components/Sidebar';
 import { UpdateBanner, type UpdateInfo } from '@/components/UpdateBanner';
 import { AppleToastStage } from '@/components/AppleToastStage';
+import { LangProvider, useT } from '@/lib/i18n';
 
 interface AppContextValue {
   showToast: (message: string, type?: 'info' | 'success' | 'error') => void;
@@ -60,7 +61,16 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
 };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  return (
+    <LangProvider>
+      <AppShellInner>{children}</AppShellInner>
+    </LangProvider>
+  );
+}
+
+function AppShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { t } = useT();
   const { toasts, showToast } = useToast();
 
   const [cookieInput, setCookieInput] = useState<string>('');
@@ -119,10 +129,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const copyText = useCallback(
     (text: string, label: string) => {
       navigator.clipboard.writeText(text).then(() => {
-        showToast(`Đã sao chép ${label}`, 'success');
+        showToast(`${t('Đã sao chép')} ${label}`, 'success');
       });
     },
-    [showToast]
+    [showToast, t]
   );
 
   const launchBrowser = useCallback(
@@ -208,17 +218,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main className="router-main">
           <header className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
             <div>
-              <h1>{meta.title}</h1>
-              <p>{meta.subtitle}</p>
+              <h1>{t(meta.title)}</h1>
+              <p>{t(meta.subtitle)}</p>
             </div>
             <button
               type="button"
               className="apple-tool-btn"
               onClick={() => setMaskEmails(!maskEmails)}
-              title="Che email/tên tài khoản khỏi mọi màn hình"
+              title={t('Che email/tên tài khoản khỏi mọi màn hình')}
               style={{ flexShrink: 0 }}
             >
-              {maskEmails ? '◐ Ẩn email: Bật' : '○ Ẩn email: Tắt'}
+              {maskEmails ? `◐ ${t('Ẩn email: Bật')}` : `○ ${t('Ẩn email: Tắt')}`}
             </button>
           </header>
           <UpdateBanner info={update} />

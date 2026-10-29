@@ -31,6 +31,7 @@ import SecurityWarning from '@/components/endpoint/SecurityWarning';
 import KeyAccessControls from '@/components/endpoint/KeyAccessControls';
 import KeySnippetModal from '@/components/endpoint/KeySnippetModal';
 import type { EndpointKey, KeyAccess } from '@/components/endpoint/types';
+import { useT } from '@/lib/i18n';
 
 // Per-key "Restrict access" rules are persisted on the key record
 // (PATCH /api/keys {id, access}) and enforced by /v1/* handlers.
@@ -65,6 +66,7 @@ interface EndpointTabProps {
 }
 
 export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
+  const { t } = useT();
   const [keys, setKeys] = useState<EndpointKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -885,7 +887,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     if (revealedKeys[keyId]) return revealedKeys[keyId];
     const res = await fetch(`/api/keys?reveal=${encodeURIComponent(keyId)}`);
     const data = await safeJson(res);
-    if (!data.key) throw new Error('Không lấy được key');
+    if (!data.key) throw new Error(t('Không lấy được key'));
     setRevealedKeys(prev => ({ ...prev, [keyId]: data.key as string }));
     return data.key as string;
   }, [revealedKeys]);
@@ -975,9 +977,9 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                       <span className="material-symbols-outlined text-sm">error</span>
                       <span className="min-w-0">
                         {tunnelPublicUrl || tunnelUrl
-                          ? `Không kết nối được ${tunnelPublicUrl || tunnelUrl}`
-                          : 'Tunnel bật nhưng thiếu public URL'}
-                        <span className="opacity-70"> — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…</span>
+                          ? t('Không kết nối được {url}', { url: tunnelPublicUrl || tunnelUrl })
+                          : t('Tunnel bật nhưng thiếu public URL')}
+                        <span className="opacity-70">{t(' — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…')}</span>
                       </span>
                     </>
                   ) : (
@@ -1084,8 +1086,8 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                     <>
                       <span className="material-symbols-outlined text-sm">error</span>
                       <span className="min-w-0">
-                        {tsUrl ? `Không kết nối được ${tsUrl}` : 'Tailscale bật nhưng thiếu URL'}
-                        <span className="opacity-70"> — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…</span>
+                        {tsUrl ? t('Không kết nối được {url}', { url: tsUrl }) : t('Tailscale bật nhưng thiếu URL')}
+                        <span className="opacity-70">{t(' — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…')}</span>
                       </span>
                     </>
                   ) : (
@@ -1171,7 +1173,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                 message={
                   !requireApiKey
                     ? 'Require API key is disabled — your endpoint is publicly accessible without authentication.'
-                    : 'Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.'
+                    : t('Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.')
                 }
                 action={{ label: !requireApiKey ? 'Enable' : 'Create key', href: '#require-api-key' }}
               />
@@ -1202,7 +1204,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               />
               <div className="flex items-center gap-1.5">
                 <p className="font-medium text-sm">Allow dashboard access via tunnel</p>
-                <HelpTooltip text="Dashboard chỉ mở từ xa bằng link mở khóa riêng (đặt cookie đăng nhập một lần). Ai không có link vẫn bị chặn — giữ link này bí mật như API key." />
+                <HelpTooltip text={t('Dashboard chỉ mở từ xa bằng link mở khóa riêng (đặt cookie đăng nhập một lần). Ai không có link vẫn bị chặn — giữ link này bí mật như API key.')} />
               </div>
             </div>
             {tunnelDashboardAccess && dashboardToken && (tunnelPublicUrl || tsUrl) && (
@@ -1215,7 +1217,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                   className="text-xs text-primary hover:underline shrink-0"
                   onClick={() => copyWithToast(`${(tunnelPublicUrl || tsUrl).replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`, 'dgk', 'dashboard access link')}
                 >
-                  Copy link mở khóa
+                  {t('Copy link mở khóa')}
                 </button>
               </div>
             )}
@@ -1477,7 +1479,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               URL without ever showing a token field. */}
           {licensed === false && (
             <p className="text-xs text-text-muted">
-              Kích hoạt license (tab <b>Bản quyền</b>) để được cấp URL cố định riêng tự động — hoặc dùng URL ngẫu nhiên bên dưới.
+              {t('Kích hoạt license (tab {tab}) để được cấp URL cố định riêng tự động — hoặc dùng URL ngẫu nhiên bên dưới.', { tab: t('Bản quyền') })}
             </p>
           )}
           <div className="flex flex-col gap-2">
@@ -1488,7 +1490,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                 icon="bolt"
                 disabled={provisioning || tunnelLoading}
               >
-                {provisioning || tunnelLoading ? 'Đang bật…' : 'Bật — URL riêng theo license'}
+                {provisioning || tunnelLoading ? t('Đang bật…') : t('Bật — URL riêng theo license')}
               </Button>
             )}
             <div className="flex gap-2">
@@ -1498,7 +1500,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                 fullWidth
                 disabled={tunnelLoading}
               >
-                {tunnelLoading ? 'Đang bật…' : licensed ? 'URL ngẫu nhiên' : 'Start Tunnel'}
+                {tunnelLoading ? t('Đang bật…') : licensed ? t('URL ngẫu nhiên') : t('Start Tunnel')}
               </Button>
               <Button onClick={() => setShowEnableTunnelModal(false)} variant="ghost" fullWidth>Cancel</Button>
             </div>
@@ -1511,7 +1513,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
             onClick={() => setShowAdvTunnel(!showAdvTunnel)}
             className="text-xs text-text-muted hover:text-text-main transition-colors self-start"
           >
-            {showAdvTunnel ? '▾' : '▸'} Tự cấu hình named tunnel (nâng cao)
+            {showAdvTunnel ? '▾' : '▸'} {t('Tự cấu hình named tunnel (nâng cao)')}
           </button>
           {showAdvTunnel && (
             <div className="border border-border-subtle rounded-lg p-3 flex flex-col gap-3">
@@ -1520,7 +1522,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                   Fixed domain (named tunnel) — optional
                 </p>
                 <Button size="sm" variant="ghost" icon="bolt" onClick={() => void handleProvisionTunnel()} disabled={provisioning}>
-                  {provisioning ? 'Đang lấy…' : 'Lấy URL theo license'}
+                  {provisioning ? t('Đang lấy…') : t('Lấy URL theo license')}
                 </Button>
               </div>
               <Input

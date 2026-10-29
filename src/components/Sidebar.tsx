@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import type { UpdateInfo } from '@/components/UpdateBanner';
+import { LANGS, useT, type Lang } from '@/lib/i18n';
 
 export type TabKey =
   | 'overview'
@@ -50,6 +51,7 @@ interface SidebarProps {
 
 export function Sidebar({ profileCount, update }: SidebarProps) {
   const pathname = usePathname();
+  const { lang, setLang, t } = useT();
   return (
     <aside className="router-sidebar">
       <div className="router-brand">
@@ -58,12 +60,32 @@ export function Sidebar({ profileCount, update }: SidebarProps) {
           <div className="router-brand-name">Muse Pool</div>
           <div className="router-brand-ver">v1.0</div>
         </div>
+        <select
+          aria-label="Language"
+          value={lang}
+          onChange={(e) => setLang(e.target.value as Lang)}
+          style={{
+            marginLeft: 'auto',
+            background: 'var(--surface-2, #1d1d28)',
+            color: 'var(--text-muted, #9a9aad)',
+            border: '1px solid var(--border, #2a2a38)',
+            borderRadius: 7,
+            fontSize: 11,
+            padding: '3px 6px',
+            cursor: 'pointer',
+            maxWidth: 78,
+          }}
+        >
+          {LANGS.map((l) => (
+            <option key={l.id} value={l.id}>{l.label}</option>
+          ))}
+        </select>
       </div>
 
       <nav className="router-nav" role="tablist">
         {NAV.map((item) => (
           <React.Fragment key={item.key}>
-            {item.section && <div className="router-section-label">{item.section}</div>}
+            {item.section && <div className="router-section-label">{t(item.section)}</div>}
             <Link
               href={item.href}
               role="tab"
@@ -71,7 +93,7 @@ export function Sidebar({ profileCount, update }: SidebarProps) {
             >
               {ICONS[item.key]}
               <span>
-                {item.label}
+                {t(item.label)}
                 {item.key === 'accounts' && profileCount > 0 ? ` (${profileCount})` : ''}
               </span>
             </Link>
@@ -84,7 +106,7 @@ export function Sidebar({ profileCount, update }: SidebarProps) {
         localhost:1412{update?.current ? ` · v${update.current}` : ' · /v1 ready'}
         {update?.updateAvailable && update.latest && (
           <span
-            title={`Bản mới v${update.latest} — chạy: npm i -g muse-gateway`}
+            title={`${t('Có bản mới')} v${update.latest} — npm i -g muse-gateway`}
             style={{
               marginLeft: 6,
               padding: '1px 7px',

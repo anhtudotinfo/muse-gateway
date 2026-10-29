@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Modal from '@/components/endpoint/ui/Modal';
 import Button from '@/components/endpoint/ui/Button';
+import { useT } from '@/lib/i18n';
 
 interface OverviewData {
   strategy: string;
@@ -49,39 +50,9 @@ function Sparkline({ values, color, height = 26 }: { values: number[]; color: st
 
 const GUIDE_DISMISSED_KEY = 'muse_guide_dismissed';
 
-const GUIDE_STEPS: { icon: string; title: string; desc: React.ReactNode }[] = [
-  {
-    icon: 'person_add',
-    title: 'Thêm tài khoản Muse',
-    desc: (
-      <>
-        Vào tab <b>Accounts</b> — dán cookies tài khoản đầu tiên bằng bookmarklet hoặc browser extension.
-      </>
-    ),
-  },
-  {
-    icon: 'key',
-    title: 'Kích hoạt license',
-    desc: (
-      <>
-        Vào tab <b>Bản quyền</b> — nhập license key để mở Gateway API <code>/v1/*</code> và cấp tunnel URL riêng.
-      </>
-    ),
-  },
-  {
-    icon: 'vpn_key',
-    title: 'Tạo API key & trỏ client',
-    desc: (
-      <>
-        Mục <b>API Keys</b> trên trang Overview — tạo key rồi trỏ client vào{' '}
-        <code>http://localhost:1412/v1</code>.
-      </>
-    ),
-  },
-];
-
 export function OverviewTab() {
   const router = useRouter();
+  const { t } = useT();
   const [ov, setOv] = useState<OverviewData | null>(null);
   const [totals, setTotals] = useState<UsageTotals | null>(null);
   const [media, setMedia] = useState<{ total: number; days: number[] } | null>(null);
@@ -141,43 +112,61 @@ export function OverviewTab() {
   const days = ov?.days || [];
   const spark = (f: (d: (typeof days)[number]) => number) => days.map(f);
 
+  const GUIDE_STEPS: { icon: string; title: string; desc: string }[] = [
+    {
+      icon: 'person_add',
+      title: t('Thêm tài khoản Muse'),
+      desc: t('Vào tab {tab} — dán cookies tài khoản đầu tiên bằng bookmarklet hoặc browser extension.', { tab: 'Accounts' }),
+    },
+    {
+      icon: 'key',
+      title: t('Kích hoạt license'),
+      desc: t('Vào tab {tab} — nhập license key để mở Gateway API {api} và cấp tunnel URL riêng.', { tab: t('Bản quyền'), api: '/v1/*' }),
+    },
+    {
+      icon: 'vpn_key',
+      title: t('Tạo API key & trỏ client'),
+      desc: t('Mục {muc} trên trang Overview — tạo key rồi trỏ client vào {url}.', { muc: 'API Keys', url: 'http://localhost:1412/v1' }),
+    },
+  ];
+
   const tiles: { label: string; value: string; color: string; sub: string; spark?: number[] }[] = [
-    { label: 'Tổng request', value: totals ? fmtNum(totals.requests) : '—', color: '#fb7185', sub: `${ov?.requests.today ?? 0} hôm nay`, spark: spark((d) => d.requests) },
-    { label: 'Thành công', value: totals ? fmtNum(totals.ok) : '—', color: '#4ade80', sub: 'request ok', spark: spark((d) => d.ok) },
-    { label: 'Thất bại', value: totals ? fmtNum(totals.failed) : '—', color: '#f87171', sub: totals?.requests ? `${Math.round(((totals.failed || 0) / totals.requests) * 100)}% tổng` : '0% tổng', spark: spark((d) => d.requests - d.ok) },
-    { label: 'Media đã tạo', value: media ? fmtNum(media.total) : '—', color: '#a78bfa', sub: 'file trong kho media', spark: media?.days },
-    { label: 'Tỷ lệ thành công', value: ov ? `${rate}%` : '—', color: '#fbbf24', sub: `${totals?.ok ?? 0}/${totals?.requests ?? 0} request`, spark: spark((d) => (d.requests ? Math.round((d.ok / d.requests) * 100) : 0)) },
-    { label: 'Latency TB', value: ov?.requests.avgMs ? `${(ov.requests.avgMs / 1000).toFixed(1)}s` : '—', color: '#67e8f9', sub: 'mỗi request', spark: spark((d) => d.avgMs) },
-    { label: 'Tổng account', value: ov ? String(ov.accounts.total) : '—', color: '#fb7185', sub: `strategy ${ov?.strategy || '—'}` },
-    { label: 'Khả dụng', value: ov ? String(ov.accounts.ready) : '—', color: '#4ade80', sub: 'sẵn sàng nhận request' },
-    { label: 'Lỗi / Hết hạn', value: ov ? String(ov.accounts.cooldown) : '—', color: '#f87171', sub: 'cooldown / error' },
-    { label: 'Đã tắt', value: ov ? String(ov.accounts.disabled) : '—', color: '#fbbf24', sub: 'disabled' },
-    { label: 'API keys', value: ov ? String(ov.keys.count) : '—', color: '#e6e6f0', sub: ov?.keys.authRequired ? 'auth bắt buộc' : 'đang mở' },
-    { label: 'Tổng token', value: totals ? fmtNum((totals.inputTokens || 0) + (totals.outputTokens || 0)) : '—', color: '#f472b6', sub: `${fmtNum(totals?.inputTokens || 0)} in · ${fmtNum(totals?.outputTokens || 0)} out` },
+    { label: t('Tổng request'), value: totals ? fmtNum(totals.requests) : '—', color: '#fb7185', sub: `${ov?.requests.today ?? 0} ${t('hôm nay')}`, spark: spark((d) => d.requests) },
+    { label: t('Thành công'), value: totals ? fmtNum(totals.ok) : '—', color: '#4ade80', sub: t('request ok'), spark: spark((d) => d.ok) },
+    { label: t('Thất bại'), value: totals ? fmtNum(totals.failed) : '—', color: '#f87171', sub: totals?.requests ? `${Math.round(((totals.failed || 0) / totals.requests) * 100)}% ${t('tổng')}` : `0% ${t('tổng')}`, spark: spark((d) => d.requests - d.ok) },
+    { label: t('Media đã tạo'), value: media ? fmtNum(media.total) : '—', color: '#a78bfa', sub: t('file trong kho media'), spark: media?.days },
+    { label: t('Tỉ lệ thành công'), value: ov ? `${rate}%` : '—', color: '#fbbf24', sub: `${totals?.ok ?? 0}/${totals?.requests ?? 0} request`, spark: spark((d) => (d.requests ? Math.round((d.ok / d.requests) * 100) : 0)) },
+    { label: t('Latency TB'), value: ov?.requests.avgMs ? `${(ov.requests.avgMs / 1000).toFixed(1)}s` : '—', color: '#67e8f9', sub: t('mỗi request'), spark: spark((d) => d.avgMs) },
+    { label: t('Tổng account'), value: ov ? String(ov.accounts.total) : '—', color: '#fb7185', sub: `strategy ${ov?.strategy || '—'}` },
+    { label: t('Khả dụng'), value: ov ? String(ov.accounts.ready) : '—', color: '#4ade80', sub: t('sẵn sàng nhận request') },
+    { label: t('Lỗi / Hết hạn'), value: ov ? String(ov.accounts.cooldown) : '—', color: '#f87171', sub: 'cooldown / error' },
+    { label: t('Đã tắt'), value: ov ? String(ov.accounts.disabled) : '—', color: '#fbbf24', sub: 'disabled' },
+    { label: t('API keys'), value: ov ? String(ov.keys.count) : '—', color: '#e6e6f0', sub: ov?.keys.authRequired ? t('auth bắt buộc') : t('đang mở') },
+    { label: t('Tổng token'), value: totals ? fmtNum((totals.inputTokens || 0) + (totals.outputTokens || 0)) : '—', color: '#f472b6', sub: `${fmtNum(totals?.inputTokens || 0)} in · ${fmtNum(totals?.outputTokens || 0)} out` },
   ];
 
   return (
     <div className="tab-surface">
       <div className="tab-top-caption">
-        <span className="caption-text">Tổng quan hệ thống — tự cập nhật mỗi 5s.</span>
-        <button type="button" className="apple-tool-btn" onClick={() => setShowGuide(true)}>Hướng dẫn</button>
-        <button type="button" className="apple-tool-btn" onClick={refresh}>Làm mới</button>
+        <span className="caption-text">{t('Tổng quan hệ thống — tự cập nhật mỗi 5s.')}</span>
+        <button type="button" className="apple-tool-btn" onClick={() => setShowGuide(true)}>{t('Hướng dẫn')}</button>
+        <button type="button" className="apple-tool-btn" onClick={refresh}>{t('Làm mới')}</button>
       </div>
 
       <Modal
         isOpen={showGuide}
         onClose={dismissGuide}
-        title="Bắt đầu với Muse Gateway"
+        title={t('Bắt đầu với Muse Gateway')}
         size="md"
         footer={
           <>
-            <Button variant="ghost" onClick={dismissGuide}>Để sau</Button>
-            <Button onClick={() => { dismissGuide(); router.push('/accounts'); }}>Bắt đầu ngay</Button>
+            <Button variant="ghost" onClick={dismissGuide}>{t('Để sau')}</Button>
+            <Button onClick={() => { dismissGuide(); router.push('/accounts'); }}>{t('Bắt đầu ngay')}</Button>
           </>
         }
       >
         <p className="text-text-muted" style={{ marginTop: 0 }}>
-          3 bước để gateway sẵn sàng nhận request — làm lần lượt từ trên xuống.
+          {t('3 bước để gateway sẵn sàng nhận request — làm lần lượt từ trên xuống.')}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 16 }}>
           {GUIDE_STEPS.map((s, i) => (
@@ -202,12 +191,12 @@ export function OverviewTab() {
       </Modal>
 
       <div className="ov-tiles">
-        {tiles.map((t) => (
-          <div key={t.label} className="ov-tile">
-            <div className="ov-tile-label">{t.label}</div>
-            <div className="ov-tile-value" style={{ color: t.color }}>{t.value}</div>
-            {t.spark && <Sparkline values={t.spark} color={t.color} />}
-            <div className="ov-tile-sub">{t.sub}</div>
+        {tiles.map((tile) => (
+          <div key={tile.label} className="ov-tile">
+            <div className="ov-tile-label">{tile.label}</div>
+            <div className="ov-tile-value" style={{ color: tile.color }}>{tile.value}</div>
+            {tile.spark && <Sparkline values={tile.spark} color={tile.color} />}
+            <div className="ov-tile-sub">{tile.sub}</div>
           </div>
         ))}
       </div>
@@ -217,8 +206,8 @@ export function OverviewTab() {
         <div className="ov-card">
           <div className="ov-card-head">
             <div>
-              <div className="ov-card-title">Pool Strategy</div>
-              <div className="ov-card-desc">Cách pool chọn account cho mỗi request.</div>
+              <div className="ov-card-title">{t('Pool Strategy')}</div>
+              <div className="ov-card-desc">{t('Cách pool chọn account cho mỗi request.')}</div>
             </div>
           </div>
           {/* Content fills the stretched card height — centers instead of
@@ -245,10 +234,10 @@ export function OverviewTab() {
               </button>
             </div>
             <div className="ov-sys-meta" style={{ marginTop: 0 }}>
-              <span><b style={{ color: 'var(--apple-green)' }}>{ov?.accounts.ready ?? 0}</b> sẵn sàng</span>
-              <span><b style={{ color: '#fb7185' }}>{ov?.accounts.busy ?? 0}</b> busy</span>
-              <span><b style={{ color: 'var(--apple-red)' }}>{ov?.accounts.cooldown ?? 0}</b> cooldown</span>
-              <span><b style={{ color: 'var(--text-tertiary)' }}>{ov?.accounts.disabled ?? 0}</b> tắt</span>
+              <span><b style={{ color: 'var(--apple-green)' }}>{ov?.accounts.ready ?? 0}</b> {t('sẵn sàng')}</span>
+              <span><b style={{ color: '#fb7185' }}>{ov?.accounts.busy ?? 0}</b> {t('busy')}</span>
+              <span><b style={{ color: 'var(--apple-red)' }}>{ov?.accounts.cooldown ?? 0}</b> {t('cooldown')}</span>
+              <span><b style={{ color: 'var(--text-tertiary)' }}>{ov?.accounts.disabled ?? 0}</b> {t('tắt')}</span>
             </div>
           </div>
         </div>
@@ -257,10 +246,10 @@ export function OverviewTab() {
         <div className="ov-card">
           <div className="ov-card-head">
             <div>
-              <div className="ov-card-title">Requests 14 ngày</div>
+              <div className="ov-card-title">{t('Requests 14 ngày')}</div>
               <div className="ov-card-desc">
-                <span style={{ color: '#fb7185' }}>●</span> request/ngày ·{' '}
-                <span style={{ color: '#4ade80' }}>●</span> tỷ lệ thành công
+                <span style={{ color: '#fb7185' }}>●</span> {t('request/ngày')} ·{' '}
+                <span style={{ color: '#4ade80' }}>●</span> {t('tỷ lệ thành công')}
               </div>
             </div>
           </div>
@@ -299,7 +288,7 @@ export function OverviewTab() {
               </div>
             </div>
           ) : (
-            <div className="ov-empty">Chưa có dữ liệu.</div>
+            <div className="ov-empty">{t('Chưa có dữ liệu.')}</div>
           )}
         </div>
 
@@ -307,19 +296,19 @@ export function OverviewTab() {
         <div className="ov-card">
           <div className="ov-card-head">
             <div>
-              <div className="ov-card-title">Hoạt động gần đây</div>
-              <div className="ov-card-desc">Request mới nhất qua pool.</div>
+              <div className="ov-card-title">{t('Hoạt động gần đây')}</div>
+              <div className="ov-card-desc">{t('Request mới nhất qua pool.')}</div>
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, flex: 1, justifyContent: 'center' }}>
             {(ov?.recent || []).length ? (
               ov!.recent!.slice(0, 4).map((r, i) => {
                 const ago = Date.now() - r.ts;
-                const agoText = ago < 60_000 ? 'vừa xong' : ago < 3600_000 ? `${Math.floor(ago / 60_000)}p trước` : ago < 86400_000 ? `${Math.floor(ago / 3600_000)}h trước` : `${Math.floor(ago / 86400_000)}d trước`;
+                const agoText = ago < 60_000 ? t('vừa xong') : ago < 3600_000 ? `${Math.floor(ago / 60_000)}m ${t('trước')}` : ago < 86400_000 ? `${Math.floor(ago / 3600_000)}h ${t('trước')}` : `${Math.floor(ago / 86400_000)}d ${t('trước')}`;
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.72rem', minWidth: 0 }}>
                     <span
-                      title={r.ok ? 'Thành công' : r.error || 'Thất bại'}
+                      title={r.ok ? t('Thành công') : r.error || t('Thất bại')}
                       style={{
                         width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
                         background: r.ok ? '#4ade80' : '#f87171',
@@ -336,14 +325,14 @@ export function OverviewTab() {
                         </span>
                       </div>
                       <div style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.error || r.promptPreview}>
-                        {r.ok ? (r.promptPreview || '(prompt trống)') : `✕ ${r.error || r.promptPreview || 'thất bại'}`}
+                        {r.ok ? (r.promptPreview || '(empty prompt)') : `✕ ${r.error || r.promptPreview || t('thất bại')}`}
                       </div>
                     </div>
                   </div>
                 );
               })
             ) : (
-              <div className="ov-empty" style={{ alignSelf: 'center' }}>Chưa có request nào.</div>
+              <div className="ov-empty" style={{ alignSelf: 'center' }}>{t('Chưa có request nào.')}</div>
             )}
           </div>
         </div>

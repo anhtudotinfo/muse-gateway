@@ -5,6 +5,7 @@
 // localStorage so it doesn't nag about the same release twice.
 import React, { useEffect, useState } from 'react';
 import { useApp } from '@/components/AppShell';
+import { useT } from '@/lib/i18n';
 
 export interface UpdateInfo {
   current: string;
@@ -17,6 +18,7 @@ const DISMISS_KEY = 'muse-update-dismissed';
 
 export function UpdateBanner({ info }: { info: UpdateInfo | null }) {
   const { copyText, showToast } = useApp();
+  const { t } = useT();
   const [dismissed, setDismissed] = useState(true); // hidden until fetch decides
   const [applying, setApplying] = useState<'idle' | 'running' | 'done'>('idle');
 
@@ -37,14 +39,14 @@ export function UpdateBanner({ info }: { info: UpdateInfo | null }) {
       const j = await res.json().catch(() => ({}));
       if (res.ok && j.ok) {
         setApplying('done');
-        showToast(j.message || `Đang cài v${info.latest}`, 'success');
+        showToast(j.message || t('Đang cài {v} — khởi động lại muse-gateway sau ~30 giây để dùng bản mới.', { v: `v${info.latest}` }), 'success');
       } else {
         setApplying('idle');
-        showToast(j.error || j.message || 'Cập nhật thất bại', 'error');
+        showToast(j.error || j.message || t('Cập nhật thất bại'), 'error');
       }
     } catch (e: any) {
       setApplying('idle');
-      showToast(e?.message || 'Cập nhật thất bại', 'error');
+      showToast(e?.message || t('Cập nhật thất bại'), 'error');
     }
   };
 
@@ -75,15 +77,15 @@ export function UpdateBanner({ info }: { info: UpdateInfo | null }) {
       <span style={{ fontSize: 15 }}>⬆</span>
       <span style={{ flex: 1, minWidth: 220 }}>
         {applying === 'done' ? (
-          <>
-            Đang cài <b>v{info.latest}</b> — <b>khởi động lại</b> muse-gateway sau ~30 giây để dùng bản mới.
-          </>
+          <>{t('Đang cài {v} — khởi động lại muse-gateway sau ~30 giây để dùng bản mới.', { v: `v${info.latest}` })}</>
         ) : (
           <>
-            Có bản mới <b>v{info.latest}</b> (đang chạy v{info.current}). Chạy{' '}
-            <code style={{ fontFamily: 'monospace' }}>npm i -g muse-gateway</code> để cập nhật, hoặc chọn{' '}
-            <b>Update</b> trong menu <code>muse-gateway</code>.
-            {info.channel === 'exe' && ' (bản .exe cần Node.js ≥ 20.9)'}
+            {t('Có bản mới {v} (đang chạy v{c}). Chạy {cmd} để cập nhật, hoặc chọn Update trong menu muse-gateway.', {
+              v: `v${info.latest}`,
+              c: `v${info.current}`,
+              cmd: 'npm i -g muse-gateway',
+            })}
+            {info.channel === 'exe' && ` ${t('(bản .exe cần Node.js ≥ 20.9)')}`}
           </>
         )}
       </span>
@@ -94,24 +96,24 @@ export function UpdateBanner({ info }: { info: UpdateInfo | null }) {
           style={{ padding: '3px 10px', fontSize: 11.5, flexShrink: 0 }}
           onClick={applyUpdate}
         >
-          Cập nhật ngay
+          {t('Cập nhật ngay')}
         </button>
       )}
       {applying === 'running' && (
-        <span style={{ fontSize: 11.5, flexShrink: 0, opacity: 0.8 }}>Đang cài…</span>
+        <span style={{ fontSize: 11.5, flexShrink: 0, opacity: 0.8 }}>{t('Đang cài…')}</span>
       )}
       <button
         type="button"
         className="apple-tool-btn"
         style={{ padding: '3px 10px', fontSize: 11.5, flexShrink: 0 }}
-        onClick={() => copyText('npm i -g muse-gateway', 'lệnh cập nhật')}
+        onClick={() => copyText('npm i -g muse-gateway', t('lệnh cập nhật'))}
       >
-        Sao chép lệnh
+        {t('Sao chép lệnh')}
       </button>
       <button
         type="button"
         onClick={dismiss}
-        title="Bỏ qua bản này"
+        title={t('Bỏ qua bản này')}
         style={{
           background: 'none',
           border: 'none',

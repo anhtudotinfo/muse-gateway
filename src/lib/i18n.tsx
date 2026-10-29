@@ -1,0 +1,470 @@
+'use client';
+
+// Minimal i18n for the dashboard — no dependency. Keys are the original
+// Vietnamese source strings, so call sites read t('Chuỗi tiếng Việt') and
+// any string not yet translated falls back to the source text.
+//
+//   const t = useT();            // inside a component under <LangProvider>
+//   t('Bản quyền')               // → 'License' when lang=en
+//   tr('en', 'Bản quyền')        // → 'License' outside React
+//
+// Add a string by wrapping the literal at the call site and adding its
+// translations to DICT below. `en` is the default/fallback language.
+
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+// zh translations live in a generated file (Han chars can't be authored via
+// the code toolchain — see scripts/zh-gen.mjs). Missing keys fall back to en.
+import { ZH } from '@/lib/i18n-zh';
+
+export type Lang = 'en' | 'vi' | 'th' | 'km' | 'hi' | 'zh';
+
+export const LANGS: { id: Lang; label: string }[] = [
+  { id: 'en', label: 'English' },
+  { id: 'vi', label: 'Tiếng Việt' },
+  { id: 'th', label: 'ไทย' },
+  { id: 'km', label: 'ខ្មែរ' },
+  { id: 'hi', label: 'हिन्दी' },
+  { id: 'zh', label: String.fromCharCode(20013, 25991) },
+];
+
+const LS_KEY = 'muse-lang';
+type DictEntry = Partial<Record<Lang, string>>;
+
+// ── Dictionary ──────────────────────────────────────────────────────────
+// key: Vietnamese source text used in code. vi falls back to the key itself.
+const DICT: Record<string, DictEntry> = {
+  // — Chrome / shell —
+  'Overview': { en: 'Overview', th: 'ภาพรวม', km: 'ទិដ្ឋភាពទូទៅ', hi: 'अवलोकन', zh: '' },
+  'Accounts': { en: 'Accounts', th: 'บัญชี', km: 'គណនី', hi: 'खाते', zh: '' },
+  'Combos': { en: 'Combos', th: 'คอมโบ', km: 'ការរួមបញ្ចូល', hi: 'कॉम्बो', zh: '' },
+  'Usage': { en: 'Usage', th: 'การใช้งาน', km: 'ការប្រើប្រាស់', hi: 'उपयोग', zh: '' },
+  'Quota': { en: 'Quota', th: 'โควตา', km: 'កូតា', hi: 'कोटा', zh: '' },
+  'Console Log': { en: 'Console Log', th: 'ล็อกคอนโซล', km: 'កុងសូល', hi: 'कंसोल लॉग', zh: '' },
+  'System': { en: 'System', th: 'ระบบ', km: 'ប្រព័ន្ធ', hi: 'सिस्टम', zh: '' },
+  'Bản quyền': { en: 'License', th: 'ไลเซนส์', km: 'អាជ្ញាប័ណ្ណ', hi: 'लाइसेंस', zh: '' },
+
+  'Tổng quan pool + endpoint & API keys — trỏ client OpenAI-compatible vào đây': {
+    en: 'Pool overview + endpoint & API keys — point your OpenAI-compatible client here',
+    th: 'ภาพรวมพูล + endpoint และ API keys — ชี้ client ที่ใช้ OpenAI มาที่นี่',
+    km: 'ទិដ្ឋភាពទូទៅ pool + endpoint & API keys — បញ្ជា client ដែលត្រូវគ្នា OpenAI មកទីនេះ',
+    hi: 'पूल अवलोकन + endpoint और API keys — अपना OpenAI-संगत क्लाइंट यहाँ जोड़ें',
+    zh: ' +  API  ——  OpenAI ',
+  },
+  'Quản lý phiên đăng nhập Muse — lưu nhiều tài khoản': {
+    en: 'Manage Muse login sessions — store multiple accounts',
+    th: 'จัดการเซสชันเข้าสู่ระบบ Muse — เก็บหลายบัญชี',
+    km: 'គ្រប់គ្រងសេសិនចូល Muse — រក្សាទុកគណនីច្រើន',
+    hi: 'Muse लॉगिन सत्र प्रबंधित करें — कई खाते रखें',
+    zh: ' Muse  —— ',
+  },
+  'Gom account theo model — fallback / round-robin / fusion': {
+    en: 'Group accounts per model — fallback / round-robin / fusion',
+    th: 'จัดกลุ่มบัญชีตามโมเดล — fallback / round-robin / fusion',
+    km: 'ដាក់គណនីជាក្រុមតាម model — fallback / round-robin / fusion',
+    hi: 'मॉडल अनुसार खाते समूहित करें — fallback / round-robin / fusion',
+    zh: ' —— fallback / round-robin / fusion',
+  },
+  'Thống kê request đi qua pool': {
+    en: 'Request statistics through the pool',
+    th: 'สถิติคำขอผ่านพูล',
+    km: 'ស្ថិតិសំណើរតាម pool',
+    hi: 'पूल से होकर जाने वाले अनुरोधों के आँकड़े',
+    zh: '',
+  },
+  'Trạng thái quota & cooldown từng tài khoản': {
+    en: 'Quota & cooldown status per account',
+    th: 'สถานะโควตาและคูลดาวน์ของแต่ละบัญชี',
+    km: 'ស្ថានភាពកូតា & cooldown នៃគណនីនីមួយៗ',
+    hi: 'प्रत्येक खाते की कोटा और कूलडाउन स्थिति',
+    zh: '',
+  },
+  'Log realtime từ driver & pool': {
+    en: 'Realtime logs from driver & pool',
+    th: 'ล็อกเรียลไทม์จาก driver และพูล',
+    km: 'កំណត់ហេតុពិតពី driver & pool',
+    hi: 'ड्राइवर और पूल से रीयलटाइम लॉग',
+    zh: '',
+  },
+  'License & đăng ký máy — key gắn với HWID': {
+    en: 'License & machine binding — key locked to HWID',
+    th: 'ไลเซนส์และผูกกับเครื่อง — key ผูกกับ HWID',
+    km: 'អាជ្ញាប័ណ្ណ & ចុះឈ្មោះម៉ាស៊ីន — key ភ្ជាប់ទៅ HWID',
+    hi: 'लाइसेंस और मशीन बाइंडिंग — key HWID से जुड़ी',
+    zh: ' —— key  HWID',
+  },
+  'Cấu hình runtime & dữ liệu · Công cụ (bookmarklet, extension, token inspector, client config)': {
+    en: 'Runtime & data settings · Tools (bookmarklet, extension, token inspector, client config)',
+    th: 'การตั้งค่ารันไทม์และข้อมูล · เครื่องมือ (bookmarklet, extension, token inspector, client config)',
+    km: 'ការកំណត់រយៈពេលរត់ & ទិន្នន័យ · ឧបករណ៍ (bookmarklet, extension, token inspector, client config)',
+    hi: 'रनटाइम और डेटा सेटिंग्स · टूल्स (bookmarklet, extension, token inspector, client config)',
+    zh: ' · （bookmarklet、、token 、）',
+  },
+  'Settings': { en: 'Settings', th: 'การตั้งค่า', km: 'ការកំណត់', hi: 'सेटिंग्स', zh: '' },
+  'Quota Tracker': { en: 'Quota Tracker', th: 'ตัวติดตามโควตา', km: 'ឧបករណ៍តាមដានកូតា', hi: 'कोटा ट्रैकर', zh: '' },
+
+  'Che email/tên tài khoản khỏi mọi màn hình': {
+    en: 'Hide account email/name on all screens',
+    th: 'ซ่อนอีเมล/ชื่อบัญชีในทุกหน้าจอ',
+    km: 'លាក់អ៊ីមែល/ឈ្មោះគណនីពីគ្រប់អេក្រង់',
+    hi: 'सभी स्क्रीन पर खाता ईमेल/नाम छिपाएँ',
+    zh: '/',
+  },
+  'Ẩn email: Bật': { en: 'Hide email: On', th: 'ซ่อนอีเมล: เปิด', km: 'លាក់អ៊ីមែល: បើក', hi: 'ईमेल छिपाएँ: चालू', zh: '：' },
+  'Ẩn email: Tắt': { en: 'Hide email: Off', th: 'ซ่อนอีเมล: ปิด', km: 'លាក់អ៊ីមែល: បិទ', hi: 'ईमेल छिपाएँ: बंद', zh: '：' },
+  'Đã sao chép': { en: 'Copied', th: 'คัดลอกแล้ว', km: 'បានចម្លង', hi: 'कॉपी किया गया', zh: '' },
+
+  'Có bản mới {v} (đang chạy v{c}). Chạy {cmd} để cập nhật, hoặc chọn Update trong menu muse-gateway.': {
+    en: 'New version {v} available (running v{c}). Run {cmd} to update, or choose Update in the muse-gateway menu.',
+    th: 'มีเวอร์ชันใหม่ {v} (กำลังใช้ v{c}) — รัน {cmd} เพื่ออัปเดต หรือเลือก Update ในเมนู muse-gateway',
+    km: 'មានកំណែថ្មី {v} (កំពុងដំណើរការ v{c}) — ដំណើរការ {cmd} ដើម្បីធ្វើបច្ចុប្បន្នភាព ឬជ្រើស Update ក្នុងម៉ឺនុយ muse-gateway',
+    hi: 'नया संस्करण {v} उपलब्ध (चल रहा v{c}) — अपडेट के लिए {cmd} चलाएँ या muse-gateway मेनू में Update चुनें',
+    zh: ' {v} （ v{c}）。 {cmd} ， muse-gateway  Update。',
+  },
+  '(bản .exe cần Node.js ≥ 20.9)': {
+    en: '(the .exe build needs Node.js ≥ 20.9)',
+    th: '(เวอร์ชัน .exe ต้อง Node.js ≥ 20.9)',
+    km: '(កំណែ .exe ត្រូវការ Node.js ≥ 20.9)',
+    hi: '(.exe बिल्ड के लिए Node.js ≥ 20.9 चाहिए)',
+    zh: '（.exe  Node.js ≥ 20.9）',
+  },
+  'Đang cài {v} — khởi động lại muse-gateway sau ~30 giây để dùng bản mới.': {
+    en: 'Installing {v} — restart muse-gateway in ~30s to use the new version.',
+    th: 'กำลังติดตั้ง {v} — รีสตาร์ท muse-gateway ใน ~30 วินาทีเพื่อใช้เวอร์ชันใหม่',
+    km: 'កំពុងដំឡើង {v} — ចាប់ផ្តើម muse-gateway ឡើងវិញក្នុង ~30 វិនាទី',
+    hi: '{v} इंस्टॉल हो रहा है — नई version के लिए ~30s में muse-gateway पुनः आरंभ करें',
+    zh: ' {v} ——  30  muse-gateway 。',
+  },
+  'Đang cài…': { en: 'Installing…', th: 'กำลังติดตั้ง…', km: 'កំពុងដំឡើង…', hi: 'इंस्टॉल हो रहा है…', zh: '…' },
+  'Sao chép lệnh': { en: 'Copy command', th: 'คัดลอกคำสั่ง', km: 'ចម្លងពាក្យបញ្ជា', hi: 'कमांड कॉपी करें', zh: '' },
+  'Bỏ qua bản này': { en: 'Skip this version', th: 'ข้ามเวอร์ชันนี้', km: 'រំលងកំណែនេះ', hi: 'यह संस्करण छोड़ें', zh: '' },
+  'Cập nhật thất bại': { en: 'Update failed', th: 'อัปเดตล้มเหลว', km: 'បរាជ័យក្នុងការធ្វើបច្ចុប្បន្នភាព', hi: 'अपडेट विफल', zh: '' },
+  'lệnh cập nhật': { en: 'update command', th: 'คำสั่งอัปเดต', km: 'ពាក្យបញ្ជាធ្វើបច្ចុប្បន្នភាព', hi: 'अपडेट कमांड', zh: '' },
+
+  // — Update banner —
+  'Có bản mới': { en: 'New version available', th: 'มีเวอร์ชันใหม่', km: 'មានកំណែថ្មី', hi: 'नया संस्करण उपलब्ध', zh: '' },
+  'Cập nhật ngay': { en: 'Update now', th: 'อัปเดตเลย', km: 'ធ្វើបច្ចុប្បន្នភាពឥឡូវ', hi: 'अभी अपडेट करें', zh: '' },
+  'Đang cập nhật…': { en: 'Updating…', th: 'กำลังอัปเดต…', km: 'កំពុងធ្វើបច្ចុប្បន្នភាព…', hi: 'अपडेट हो रहा है…', zh: '…' },
+  'Đang cài — khởi động lại sau ~30s': { en: 'Installing — restart in ~30s', th: 'กำลังติดตั้ง — รีสตาร์ทใน ~30 วินาที', km: 'កំពុងដំឡើង — ចាប់ផ្តើមឡើងវិញក្នុង ~30 វិនាទី', hi: 'इंस्टॉल हो रहा है — ~30s में पुनः आरंभ करें', zh: ' ——  30 ' },
+  'Để sau': { en: 'Later', th: 'ไว้ทีหลัง', km: 'ពេលក្រោយ', hi: 'बाद में', zh: '' },
+
+  // — Overview —
+  'Tổng quan hệ thống — tự cập nhật mỗi 5s': {
+    en: 'System overview — auto-refreshes every 5s',
+    th: 'ภาพรวมระบบ — อัปเดตอัตโนมัติทุก 5 วินาที',
+    km: 'ទិដ្ឋភាពប្រព័ន្ធ — ធ្វើបច្ចុប្បន្នភាពដោយស្វ័យប្រវត្តិរៀងរាល់ 5 វិនាទី',
+    hi: 'सिस्टम अवलोकन — हर 5 सेकंड में ऑटो-रिफ्रेश',
+    zh: ' ——  5 ',
+  },
+  'Hướng dẫn': { en: 'Guide', th: 'คู่มือ', km: 'មគ្គុទ្ទេសក៍', hi: 'गाइड', zh: '' },
+  'Làm mới': { en: 'Refresh', th: 'รีเฟรช', km: 'ផ្ទុកឡើងវិញ', hi: 'रिफ्रेश', zh: '' },
+  'Tổng request': { en: 'Total requests', th: 'คำขอทั้งหมด', km: 'សំណើសរុប', hi: 'कुल अनुरोध', zh: '' },
+  'Thành công': { en: 'Success', th: 'สำเร็จ', km: 'ជោគជ័យ', hi: 'सफल', zh: '' },
+  'Thất bại': { en: 'Failed', th: 'ล้มเหลว', km: 'បរាជ័យ', hi: 'विफल', zh: '' },
+  'Model đa tạo': { en: 'Models served', th: 'โมเดลที่ให้บริการ', km: 'ម៉ូដែលបានបង្កើត', hi: 'सर्व किए गए मॉडल', zh: '' },
+  'Tỉ lệ thành công': { en: 'Success rate', th: 'อัตราสำเร็จ', km: 'អត្រាជោគជ័យ', hi: 'सफलता दर', zh: '' },
+  'Latency TB': { en: 'Avg latency', th: 'เวลาแฝงเฉลี่ย', km: 'ភាពយឺតយ៉ាវមធ្យម', hi: 'औसत लेटेंसी', zh: '' },
+  'Tổng account': { en: 'Total accounts', th: 'บัญชีทั้งหมด', km: 'គណនីសរុប', hi: 'कुल खाते', zh: '' },
+  'Đang dùng': { en: 'Active', th: 'กำลังใช้งาน', km: 'កំពុងប្រើ', hi: 'सक्रिय', zh: '' },
+  'Lỗi / hết hạn': { en: 'Error / expired', th: 'ข้อผิดพลาด / หมดอายุ', km: 'កំហុស / ផុតកំណត់', hi: 'त्रुटि / समाप्त', zh: ' / ' },
+  'API keys': { en: 'API keys', th: 'คีย์ API', km: 'កូនសោ API', hi: 'API कुंजियाँ', zh: 'API ' },
+  'Tổng token': { en: 'Total tokens', th: 'โทเคนทั้งหมด', km: 'ថូខឹនសរុប', hi: 'कुल टोकन', zh: 'token ' },
+  'Pool Strategy': { en: 'Pool Strategy', th: 'กลยุทธ์พูล', km: 'យុទ្ធសាស្ត្រ pool', hi: 'पूल रणनीति', zh: '' },
+  'Cách pool chọn account cho mỗi request.': {
+    en: 'How the pool picks an account for each request.',
+    th: 'วิธีที่พูลเลือกบัญชีสำหรับแต่ละคำขอ',
+    km: 'របៀបដែល pool ជ្រើសគណនីសម្រាប់សំណើនីមួយៗ',
+    hi: 'पूल प्रत्येक अनुरोध के लिए खाता कैसे चुनता है',
+    zh: '。',
+  },
+  'Round-robin': { en: 'Round-robin', th: 'Round-robin', km: 'Round-robin', hi: 'Round-robin', zh: '' },
+  'Fallback': { en: 'Fallback', th: 'Fallback', km: 'Fallback', hi: 'Fallback', zh: '' },
+  'sẵn sàng': { en: 'ready', th: 'พร้อม', km: 'រួចរាល់', hi: 'तैयार', zh: '' },
+  'busy': { en: 'busy', th: 'กำลังทำงาน', km: 'មមាញឹក', hi: 'व्यस्त', zh: '' },
+  'cooldown': { en: 'cooldown', th: 'คูลดาวน์', km: 'ពេលសម្រាក', hi: 'कूलडाउन', zh: '' },
+  'tắt': { en: 'off', th: 'ปิด', km: 'បិទ', hi: 'बंद', zh: '' },
+  'Requests 14 ngày': { en: 'Requests — 14 days', th: 'คำขอ 14 วัน', km: 'សំណើ ១៤ ថ្ងៃ', hi: 'अनुरोध — 14 दिन', zh: ' — 14 ' },
+  'request/ngày': { en: 'requests/day', th: 'คำขอ/วัน', km: 'សំណើ/ថ្ងៃ', hi: 'अनुरोध/दिन', zh: '/' },
+  'Hoạt động gần đây': { en: 'Recent activity', th: 'กิจกรรมล่าสุด', km: 'សកម្មភាពថ្មីៗ', hi: 'हाल की गतिविधि', zh: '' },
+  'Request mới nhất qua pool.': {
+    en: 'Latest requests through the pool.',
+    th: 'คำขอล่าสุดผ่านพูล',
+    km: 'សំណើចុងក្រោយតាម pool',
+    hi: 'पूल से होकर गए नवीनतम अनुरोध',
+    zh: '。',
+  },
+  'Chưa có request nào.': {
+    en: 'No requests yet.',
+    th: 'ยังไม่มีคำขอ',
+    km: 'មិនទាន់មានសំណើ',
+    hi: 'अभी कोई अनुरोध नहीं',
+    zh: '。',
+  },
+  'API Endpoint': { en: 'API Endpoint', th: 'API Endpoint', km: 'API Endpoint', hi: 'API एंडपॉइंट', zh: 'API ' },
+  'Local': { en: 'Local', th: 'โลคอล', km: 'មូលដ្ឋាន', hi: 'लोकल', zh: '' },
+  'Tunnel': { en: 'Tunnel', th: 'อุโมงค์', km: 'ផ្លូវរណ្តៅ', hi: 'टनल', zh: '' },
+  'Tailscale': { en: 'Tailscale', th: 'Tailscale', km: 'Tailscale', hi: 'Tailscale', zh: 'Tailscale' },
+  'Enable': { en: 'Enable', th: 'เปิดใช้งาน', km: 'បើក', hi: 'सक्षम करें', zh: '' },
+  'Disable': { en: 'Disable', th: 'ปิดใช้งาน', km: 'បិទ', hi: 'अक्षम करें', zh: '' },
+  'Connecting…': { en: 'Connecting…', th: 'กำลังเชื่อมต่อ…', km: 'កំពុងភ្ជាប់…', hi: 'कनेक्ट हो रहा है…', zh: '…' },
+  'Checking…': { en: 'Checking…', th: 'กำลังตรวจสอบ…', km: 'កំពុងពិនិត្យ…', hi: 'जाँच हो रही है…', zh: '…' },
+  'Reconnecting…': { en: 'Reconnecting…', th: 'กำลังเชื่อมต่อใหม่…', km: 'កំពុងភ្ជាប់ឡើងវិញ…', hi: 'पुनः कनेक्ट हो रहा है…', zh: '…' },
+
+  // — Welcome modal —
+  'Chào mừng đến Muse Pool': { en: 'Welcome to Muse Pool', th: 'ยินดีต้อนรับสู่ Muse Pool', km: 'សូមស្វាគមន៍មកកាន់ Muse Pool', hi: 'Muse Pool में स्वागत है', zh: ' Muse Pool' },
+  'Bắt đầu ngay': { en: 'Get started', th: 'เริ่มเลย', km: 'ចាប់ផ្តើម', hi: 'शुरू करें', zh: '' },
+  'Thêm account đầu tiên': { en: 'Add your first account', th: 'เพิ่มบัญชีแรกของคุณ', km: 'បន្ថែមគណនីដំបូង', hi: 'पहला खाता जोड़ें', zh: '' },
+  'Dán cookies Muse vào tab Accounts — pool tự nhận và kiểm tra session.': {
+    en: 'Paste Muse cookies on the Accounts tab — the pool validates the session automatically.',
+    th: 'วางคุกกี้ Muse ในแท็บ Accounts — พูลจะตรวจสอบเซสชันให้อัตโนมัติ',
+    km: 'បិទភ្ជាប់ cookies Muse ក្នុងផ្ទាំង Accounts — pool ពិនិត្យសេសិនដោយស្វ័យប្រវត្តិ',
+    hi: 'Accounts टैब में Muse cookies पेस्ट करें — पूल सत्र को स्वतः सत्यापित करता है',
+    zh: ' Accounts  Muse cookies —— 。',
+  },
+  'Tạo API key': { en: 'Create an API key', th: 'สร้าง API key', km: 'បង្កើត API key', hi: 'API key बनाएँ', zh: ' API ' },
+  'Bật "Require API key" trong phần Endpoint rồi tạo key cho từng client.': {
+    en: 'Turn on "Require API key" in the Endpoint section, then create a key per client.',
+    th: 'เปิด "Require API key" ในส่วน Endpoint แล้วสร้างคีย์สำหรับแต่ละ client',
+    km: 'បើក "Require API key" ក្នុងផ្នែក Endpoint រួចបង្កើតកូនសោសម្រាប់ client នីមួយៗ',
+    hi: 'Endpoint सेक्शन में "Require API key" चालू करें, फिर प्रत्येक क्लाइंट के लिए key बनाएँ',
+    zh: ' Endpoint  "Require API key"，。',
+  },
+  'Trỏ client vào endpoint': { en: 'Point your client to the endpoint', th: 'ชี้ client ไปที่ endpoint', km: 'បញ្ជា client ទៅ endpoint', hi: 'अपने क्लाइंट को एंडपॉइंट पर जोड़ें', zh: '' },
+  'Dùng http://localhost:1412/v1 trong bất kỳ app OpenAI-compatible nào.': {
+    en: 'Use http://localhost:1412/v1 in any OpenAI-compatible app.',
+    th: 'ใช้ http://localhost:1412/v1 ในแอปใดก็ได้ที่ใช้ OpenAI',
+    km: 'ប្រើ http://localhost:1412/v1 ក្នុង app ណាមួយដែលត្រូវគ្នា OpenAI',
+    hi: 'किसी भी OpenAI-संगत ऐप में http://localhost:1412/v1 का उपयोग करें',
+    zh: ' OpenAI  http://localhost:1412/v1。',
+  },
+
+  // — License tab —
+  'Thông tin bản quyền': { en: 'License information', th: 'ข้อมูลไลเซนส์', km: 'ព័ត៌មានអាជ្ញាប័ណ្ណ', hi: 'लाइसेंस जानकारी', zh: '' },
+  'Trạng thái': { en: 'Status', th: 'สถานะ', km: 'ស្ថានភាព', hi: 'स्थिति', zh: '' },
+  'Email': { en: 'Email', th: 'อีเมล', km: 'អ៊ីមែល', hi: 'ईमेल', zh: '' },
+  'Hết hạn': { en: 'Expires', th: 'หมดอายุ', km: 'ផុតកំណត់', hi: 'समाप्ति', zh: '' },
+  'Kích hoạt': { en: 'Activate', th: 'เปิดใช้งาน', km: 'ធ្វើឱ្យសកម្ម', hi: 'सक्रिय करें', zh: '' },
+  'Đang kích hoạt…': { en: 'Activating…', th: 'กำลังเปิดใช้งาน…', km: 'កំពុងធ្វើឱ្យសកម្ម…', hi: 'सक्रिय हो रहा है…', zh: '…' },
+  'Dán license key vào đây…': { en: 'Paste your license key here…', th: 'วาง license key ที่นี่…', km: 'បិទភ្ជាប់ license key នៅទីនេះ…', hi: 'अपनी license key यहाँ पेस्ट करें…', zh: '…' },
+  'Sao chép': { en: 'Copy', th: 'คัดลอก', km: 'ចម្លង', hi: 'कॉपी', zh: '' },
+  'Không hợp lệ': { en: 'Invalid', th: 'ไม่ถูกต้อง', km: 'មិនត្រឹមត្រូវ', hi: 'अमान्य', zh: '' },
+  'Licensed': { en: 'Licensed', th: 'มีไลเซนส์', km: 'មានអាជ្ញាប័ណ្ណ', hi: 'लाइसेंस प्राप्त', zh: '' },
+  'Community': { en: 'Community', th: 'ชุมชน', km: 'សហគមន៍', hi: 'कम्युनिटी', zh: '' },
+  'License key chứa email + hạn + khóa HWID, ký Ed25519 — verify kiểm tra chữ ký thật, key sửa/giả sẽ bị từ chối.': {
+    en: 'License key embeds email + expiry + HWID lock, Ed25519-signed — verify checks the real signature; tampered/forged keys are rejected.',
+    th: 'license key มี email + วันหมดอายุ + ล็อก HWID เซ็นด้วย Ed25519 — verify ตรวจลายเซ็นจริง key ที่ถูกแก้/ปลอมจะถูกปฏิเสธ',
+    km: 'license key មាន email + ថ្ងៃផុត + HWID ចុះហត្ថលេខា Ed25519 — verify ពិនិត្យហត្ថលេខាពិត key កែ/ក្លែងនឹងត្រូវបដិសេធ',
+    hi: 'license key में email + expiry + HWID lock होता है, Ed25519-signed — verify असली signature जाँचता है, बदली/नकली key अस्वीकृत',
+    zh: ' +  + HWID ，Ed25519  —— verify ，/。',
+  },
+  'Sản phẩm': { en: 'Product', th: 'ผลิตภัณฑ์', km: 'ផលិតផល', hi: 'प्रोडक्ट', zh: '' },
+  'Loại license': { en: 'License type', th: 'ประเภทไลเซนส์', km: 'ប្រភេទអាជ្ញាប័ណ្ណ', hi: 'लाइसेंस प्रकार', zh: '' },
+  'Email đăng ký': { en: 'Registered email', th: 'อีเมลที่ลงทะเบียน', km: 'អ៊ីមែលបានចុះឈ្មោះ', hi: 'पंजीकृत ईमेल', zh: '' },
+  'License Key': { en: 'License Key', th: 'License Key', km: 'License Key', hi: 'License Key', zh: 'License Key' },
+  'Không giới hạn': { en: 'No expiry', th: 'ไม่มีวันหมดอายุ', km: 'គ្មានកំណត់', hi: 'कोई सीमा नहीं', zh: '' },
+  'HWID (máy này)': { en: 'HWID (this machine)', th: 'HWID (เครื่องนี้)', km: 'HWID (ម៉ាស៊ីននេះ)', hi: 'HWID (यह मशीन)', zh: 'HWID（）' },
+  'Khóa theo máy': { en: 'Machine-bound', th: 'ผูกกับเครื่อง', km: 'ភ្ជាប់តាមម៉ាស៊ីន', hi: 'मशीन-बाउंड', zh: '' },
+  'Có — key chỉ chạy trên máy này': { en: 'Yes — key only works on this machine', th: 'ใช่ — key ใช้ได้เฉพาะเครื่องนี้', km: 'មាន — key ដំណើរការតែលើម៉ាស៊ីននេះ', hi: 'हाँ — key सिर्फ इस मशीन पर चलती है', zh: ' —— key ' },
+  'Không — floating license': { en: 'No — floating license', th: 'ไม่ — floating license', km: 'ទេ — floating license', hi: 'नहीं — floating license', zh: ' —— ' },
+  'Kích hoạt lúc': { en: 'Activated at', th: 'เปิดใช้เมื่อ', km: 'ធ្វើឱ្យសកម្មនៅ', hi: 'सक्रिय समय', zh: '' },
+  'Mua key:': { en: 'Buy a key:', th: 'ซื้อคีย์:', km: 'ទិញកូនសោ:', hi: 'key खरीदें:', zh: ' key：' },
+  'Hỗ trợ:': { en: 'Support:', th: 'ช่วยเหลือ:', km: 'ជំនួយ:', hi: 'सपोर्ट:', zh: '：' },
+  'Đang kiểm tra…': { en: 'Checking…', th: 'กำลังตรวจสอบ…', km: 'កំពុងពិនិត្យ…', hi: 'जाँच हो रही है…', zh: '…' },
+  '↻ Kiểm tra lại': { en: '↻ Re-verify', th: '↻ ตรวจสอบอีกครั้ง', km: '↻ ពិនិត្យម្តងទៀត', hi: '↻ दोबारा जाँचें', zh: '↻ ' },
+  'Gỡ license khỏi máy này': { en: 'Remove license from this machine', th: 'ถอดไลเซนส์ออกจากเครื่องนี้', km: 'ដកអាជ្ញាប័ណ្ណចេញពីម៉ាស៊ីននេះ', hi: 'इस मशीन से लाइसेंस हटाएँ', zh: '' },
+  'Gỡ license khỏi máy này?': { en: 'Remove license from this machine?', th: 'ถอดไลเซนส์ออกจากเครื่องนี้?', km: 'ដកអាជ្ញាប័ណ្ណចេញពីម៉ាស៊ីននេះ?', hi: 'इस मशीन से लाइसेंस हटाएँ?', zh: '？' },
+  'Gateway API {api} đang khóa — mọi request trả {code}. Mua license key tại {site} hoặc nhắn Telegram {tg}, rồi dán key vào ô bên dưới.': {
+    en: 'Gateway API {api} is locked — every request returns {code}. Buy a license key at {site} or message Telegram {tg}, then paste the key below.',
+    th: 'Gateway API {api} ถูกล็อก — ทุกคำขอได้ {code} — ซื้อ license key ที่ {site} หรือทัก Telegram {tg} แล้ววางคีย์ด้านล่าง',
+    km: 'Gateway API {api} ត្រូវបានចាក់សោ — រាល់សំណើត្រឡប់ {code} — ទិញ license key នៅ {site} ឬផ្ញើ Telegram {tg} រួចបិទកូនសោខាងក្រោម',
+    hi: 'Gateway API {api} लॉक है — हर request पर {code} आता है — {site} पर license key खरीदें या Telegram {tg} पर संदेश भेजें, फिर key नीचे पेस्ट करें',
+    zh: 'Gateway API {api}  ——  {code}。 {site}  Telegram {tg}， key 。',
+  },
+  'Dán license key (MUSE1.…)': { en: 'Paste license key (MUSE1.…)', th: 'วาง license key (MUSE1.…)', km: 'បិទភ្ជាប់ license key (MUSE1.…)', hi: 'license key पेस्ट करें (MUSE1.…)', zh: '（MUSE1.…）' },
+  '✓ Kích hoạt license': { en: '✓ Activate license', th: '✓ เปิดใช้ไลเซนส์', km: '✓ ធ្វើឱ្យសកម្មអាជ្ញាប័ណ្ណ', hi: '✓ लाइसेंस सक्रिय करें', zh: '✓ ' },
+  'Lần verify gần nhất:': { en: 'Last verify:', th: 'ตรวจสอบล่าสุด:', km: 'ពិនិត្យលើកចុងក្រោយ:', hi: 'अंतिम सत्यापन:', zh: '：' },
+  'Thành công!': { en: 'Success!', th: 'สำเร็จ!', km: 'ជោគជ័យ!', hi: 'सफल!', zh: '！' },
+  'chưa verify': { en: 'not verified yet', th: 'ยังไม่ได้ตรวจสอบ', km: 'មិនទាន់ពិនិត្យ', hi: 'अभी verify नहीं हुआ', zh: '' },
+  'Dán license key trước': { en: 'Paste a license key first', th: 'วาง license key ก่อน', km: 'បិទភ្ជាប់ license key ជាមុន', hi: 'पहले license key पेस्ट करें', zh: '' },
+  'Đã kích hoạt license cho {x}': { en: 'License activated for {x}', th: 'เปิดใช้ไลเซนส์สำหรับ {x}', km: 'បានធ្វើឱ្យសកម្មអាជ្ញាប័ណ្ណសម្រាប់ {x}', hi: '{x} के लिए लाइसेंस सक्रिय', zh: ' {x} ' },
+  'máy này': { en: 'this machine', th: 'เครื่องนี้', km: 'ម៉ាស៊ីននេះ', hi: 'यह मशीन', zh: '' },
+  'Kích hoạt thất bại:': { en: 'Activation failed:', th: 'เปิดใช้ล้มเหลว:', km: 'បរាជ័យក្នុងការធ្វើឱ្យសកម្ម:', hi: 'सक्रियण विफल:', zh: '：' },
+  'Đã gỡ license — về bản community': { en: 'License removed — back to community', th: 'ถอดไลเซนส์แล้ว — กลับเป็น community', km: 'បានដកអាជ្ញាប័ណ្ណ — ត្រឡប់ទៅ community', hi: 'लाइसेंस हटा दिया — community पर वापस', zh: ' —— ' },
+  'Lỗi verify license': { en: 'License verify error', th: 'ตรวจสอบไลเซนส์ล้มเหลว', km: 'កំហុសក្នុងការពិនិត្យអាជ្ញាប័ណ្ណ', hi: 'लाइसेंस सत्यापन त्रुटि', zh: '' },
+  'email đăng ký': { en: 'registered email', th: 'อีเมลที่ลงทะเบียน', km: 'អ៊ីមែលបានចុះឈ្មោះ', hi: 'पंजीकृत ईमेल', zh: '' },
+  'license key': { en: 'license key', th: 'license key', km: 'license key', hi: 'license key', zh: 'license key' },
+
+  // — Endpoint tab —
+  'Không lấy được key': { en: 'Could not retrieve key', th: 'ดึงคีย์ไม่ได้', km: 'មិនអាចទាញកូនសោ', hi: 'key प्राप्त नहीं हुई', zh: '' },
+  'Không kết nối được {url}': { en: 'Cannot reach {url}', th: 'เชื่อมต่อ {url} ไม่ได้', km: 'មិនអាចភ្ជាប់ {url}', hi: '{url} से कनेक्ट नहीं हो पाया', zh: ' {url}' },
+  'Tunnel bật nhưng thiếu public URL': { en: 'Tunnel is on but missing public URL', th: 'Tunnel เปิดอยู่แต่ไม่มี public URL', km: 'Tunnel បើកតែខ្វះ public URL', hi: 'Tunnel चालू है पर public URL नहीं है', zh: 'Tunnel  URL' },
+  'Tailscale bật nhưng thiếu URL': { en: 'Tailscale is on but missing URL', th: 'Tailscale เปิดอยู่แต่ไม่มี URL', km: 'Tailscale បើកតែខ្វះ URL', hi: 'Tailscale चालू है पर URL नहीं है', zh: 'Tailscale  URL' },
+  ' — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…': {
+    en: ' — check the token matches the right tunnel + hostname route. Retrying…',
+    th: ' — ตรวจสอบ token ตรงกับ tunnel และ hostname route — กำลังลองใหม่…',
+    km: ' — ពិនិត្យ token ត្រូវនឹង tunnel + hostname route — កំពុងព្យាយាមឡើងវិញ…',
+    hi: ' — जाँचें कि token सही tunnel + hostname route से मेल खाता है। पुनः प्रयास…',
+    zh: ' ——  token  tunnel + hostname 。…',
+  },
+  ' — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…': {
+    en: ' — check tailscaled/funnel is running. Retrying…',
+    th: ' — ตรวจสอบว่า tailscaled/funnel กำลังทำงาน — กำลังลองใหม่…',
+    km: ' — ពិនិត្យ tailscaled/funnel កំពុងរត់ — កំពុងព្យាយាមឡើងវិញ…',
+    hi: ' — जाँचें कि tailscaled/funnel चल रहा है। पुनः प्रयास…',
+    zh: ' ——  tailscaled/funnel 。…',
+  },
+  'Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.': {
+    en: 'No API key is enabled — the endpoint is publicly open. Create a key in the API Keys section below.',
+    th: 'ยังไม่มี API key ที่เปิดอยู่ — endpoint เปิดสาธารณะ — สร้างคีย์ในส่วน API Keys ด้านล่าง',
+    km: 'មិនមាន API key បើកទេ — endpoint កំពុងបើកសាធារណៈ — បង្កើតកូនសោក្នុងផ្នែក API Keys ខាងក្រោម',
+    hi: 'कोई API key सक्षम नहीं — endpoint सार्वजनिक है — नीचे API Keys सेक्शन में key बनाएँ',
+    zh: ' API key —— 。 API Keys 。',
+  },
+  'Dashboard chỉ mở từ xa bằng link mở khóa riêng (đặt cookie đăng nhập một lần). Ai không có link vẫn bị chặn — giữ link này bí mật như API key.': {
+    en: 'Remote dashboard opens only via your private unlock link (sets a one-time login cookie). Anyone without the link stays blocked — keep it secret like an API key.',
+    th: 'Dashboard เปิดจากระยะไกลได้เฉพาะด้วยลิงก์ปลดล็อกส่วนตัว (ตั้งคุกกี้ล็อกอินครั้งเดียว) — คนที่ไม่มีลิงก์จะถูกบล็อก — เก็บลิงก์นี้เป็นความลับเหมือน API key',
+    km: 'Dashboard បើកពីចម្ងាយតែតាម link ដោះសោផ្ទាល់ខ្លួន (ដាក់ cookie ម្តង) — អ្នកគ្មាន link នៅតែត្រូវប្លុក — រក្សា link នេះដូច API key',
+    hi: 'रिमोट dashboard सिर्फ आपके निजी अनलॉक लिंक से खुलता है (एक बार login cookie सेट करता है) — बिना लिंक वाला हर कोई blocked रहेगा — इसे API key जैसा गुप्त रखें',
+    zh: ' dashboard （ cookie）。 ——  API key 。',
+  },
+  'Copy link mở khóa': { en: 'Copy unlock link', th: 'คัดลอกลิงก์ปลดล็อก', km: 'ចម្លង link ដោះសោ', hi: 'अनलॉक लिंक कॉपी करें', zh: '' },
+  'Kích hoạt license (tab {tab}) để được cấp URL cố định riêng tự động — hoặc dùng URL ngẫu nhiên bên dưới.': {
+    en: 'Activate a license ({tab} tab) to get your own fixed URL automatically — or use a random URL below.',
+    th: 'เปิดใช้ไลเซนส์ (แท็บ {tab}) เพื่อรับ URL คงที่ส่วนตัวโดยอัตโนมัติ — หรือใช้ URL สุ่มด้านล่าง',
+    km: 'ធ្វើឱ្យសកម្មអាជ្ញាប័ណ្ណ (ផ្ទាំង {tab}) ដើម្បីទទួល URL ថេរផ្ទាល់ខ្លួនដោយស្វ័យប្រវត្តិ — ឬប្រើ URL ចៃដន្យខាងក្រោម',
+    hi: 'अपना फिक्स्ड URL अपने आप पाने के लिए लाइसेंस सक्रिय करें ({tab} टैब) — या नीचे रैंडम URL इस्तेमाल करें',
+    zh: '（{tab} ） URL ——  URL。',
+  },
+  'Đang bật…': { en: 'Starting…', th: 'กำลังเปิด…', km: 'កំពុងបើក…', hi: 'शुरू हो रहा है…', zh: '…' },
+  'Bật — URL riêng theo license': { en: 'Enable — private URL from your license', th: 'เปิด — URL ส่วนตัวตามไลเซนส์', km: 'បើក — URL ផ្ទាល់ខ្លួនតាមអាជ្ញាប័ណ្ណ', hi: 'चालू करें — license से निजी URL', zh: ' ——  URL' },
+  'URL ngẫu nhiên': { en: 'Random URL', th: 'URL สุ่ม', km: 'URL ចៃដន្យ', hi: 'रैंडम URL', zh: ' URL' },
+  'Start Tunnel': { en: 'Start Tunnel', th: 'เริ่มอุโมงค์', km: 'ចាប់ផ្តើម Tunnel', hi: 'Tunnel शुरू करें', zh: '' },
+  'Tự cấu hình named tunnel (nâng cao)': { en: 'Configure named tunnel manually (advanced)', th: 'ตั้งค่า named tunnel เอง (ขั้นสูง)', km: 'កំណត់ named tunnel ដោយខ្លួនឯង (កម្រិតខ្ពស់)', hi: 'named tunnel खुद कॉन्फ़िगर करें (एडवांस्ड)', zh: ' named tunnel（）' },
+  'Đang lấy…': { en: 'Fetching…', th: 'กำลังดึง…', km: 'កំពុងទាញ…', hi: 'प्राप्त हो रहा है…', zh: '…' },
+  'Lấy URL theo license': { en: 'Get URL from license', th: 'รับ URL จากไลเซนส์', km: 'ទាញ URL តាមអាជ្ញាប័ណ្ណ', hi: 'license से URL लें', zh: ' URL' },
+  'Cancel': { en: 'Cancel', th: 'ยกเลิก', km: 'បោះបង់', hi: 'रद्द करें', zh: '' },
+  'API Keys': { en: 'API Keys', th: 'คีย์ API', km: 'កូនសោ API', hi: 'API कुंजियाँ', zh: 'API ' },
+  'Create Key': { en: 'Create Key', th: 'สร้างคีย์', km: 'បង្កើតកូនសោ', hi: 'Key बनाएँ', zh: '' },
+  'Require API key': { en: 'Require API key', th: 'บังคับใช้ API key', km: 'តម្រូវ API key', hi: 'API key आवश्यक', zh: ' API key' },
+  'Requests without a valid key will be rejected': {
+    en: 'Requests without a valid key will be rejected',
+    th: 'คำขอที่ไม่มีคีย์ที่ถูกต้องจะถูกปฏิเสธ',
+    km: 'សំណើគ្មានកូនសោត្រឹមត្រូវនឹងត្រូវបដិសេធ',
+    hi: 'बिना मान्य key के अनुरोध अस्वीकार होंगे',
+    zh: '',
+  },
+  'Require API key is disabled — anyone can access your endpoint.': {
+    en: 'Require API key is disabled — anyone can access your endpoint.',
+    th: 'Require API key ถูกปิด — ใครก็เข้าถึง endpoint ได้',
+    km: 'Require API key បិទ — អ្នកណាក៏ចូល endpoint បាន',
+    hi: 'Require API key बंद है — कोई भी आपके endpoint को एक्सेस कर सकता है',
+    zh: 'Require API key  —— 。',
+  },
+  'Remote Endpoint': { en: 'Remote Endpoint', th: 'Remote Endpoint', km: 'Remote Endpoint', hi: 'रिमोट एंडपॉइंट', zh: '' },
+  'Allow dashboard access via tunnel': {
+    en: 'Allow dashboard access via tunnel',
+    th: 'อนุญาตเข้าถึง dashboard ผ่าน tunnel',
+    km: 'អនុញ្ញាតចូល dashboard តាម tunnel',
+    hi: 'tunnel से dashboard एक्सेस अनुमति दें',
+    zh: ' tunnel  dashboard',
+  },
+  'Remote Endpoint (Tunnel)': { en: 'Remote Endpoint (Tunnel)', th: 'Remote Endpoint (Tunnel)', km: 'Remote Endpoint (Tunnel)', hi: 'Remote Endpoint (Tunnel)', zh: 'Remote Endpoint（Tunnel）' },
+
+  // — Overview tiles / extras —
+  'Media đã tạo': { en: 'Media created', th: 'มีเดียที่สร้าง', km: 'មេឌៀបានបង្កើត', hi: 'बनाई गई मीडिया', zh: '' },
+  'Khả dụng': { en: 'Available', th: 'พร้อมใช้งาน', km: 'អាចប្រើបាន', hi: 'उपलब्ध', zh: '' },
+  'Lỗi / Hết hạn': { en: 'Error / Expired', th: 'ข้อผิดพลาด / หมดอายุ', km: 'កំហុស / ផុតកំណត់', hi: 'त्रुटि / समाप्त', zh: ' / ' },
+  'Đã tắt': { en: 'Disabled', th: 'ปิดอยู่', km: 'បានបិទ', hi: 'बंद', zh: '' },
+  'hôm nay': { en: 'today', th: 'วันนี้', km: 'ថ្ងៃនេះ', hi: 'आज', zh: '' },
+  'request ok': { en: 'requests ok', th: 'คำขอสำเร็จ', km: 'សំណើជោគជ័យ', hi: 'सफल अनुरोध', zh: '' },
+  'tổng': { en: 'total', th: 'ทั้งหมด', km: 'សរុប', hi: 'कुल', zh: '' },
+  'file trong kho media': { en: 'files in media store', th: 'ไฟล์ในคลังมีเดีย', km: 'ឯកសារក្នុងឃ្លាំងមេឌៀ', hi: 'मीडिया स्टोर में फ़ाइलें', zh: '' },
+  'mỗi request': { en: 'per request', th: 'ต่อคำขอ', km: 'ក្នុងមួយសំណើ', hi: 'प्रति अनुरोध', zh: '' },
+  'sẵn sàng nhận request': { en: 'ready for requests', th: 'พร้อมรับคำขอ', km: 'រួចរាល់ទទួលសំណើ', hi: 'अनुरोध हेतु तैयार', zh: '' },
+  'auth bắt buộc': { en: 'auth required', th: 'ต้องยืนยันตัวตน', km: 'តម្រូវការផ្ទៀងផ្ទាត់', hi: 'प्रमाणीकरण आवश्यक', zh: '' },
+  'đang mở': { en: 'open', th: 'เปิดอยู่', km: 'កំពុងបើក', hi: 'खुला', zh: '' },
+  'tỷ lệ thành công': { en: 'success rate', th: 'อัตราสำเร็จ', km: 'អត្រាជោគជ័យ', hi: 'सफलता दर', zh: '' },
+  'Chưa có dữ liệu.': { en: 'No data yet.', th: 'ยังไม่มีข้อมูล', km: 'មិនទាន់មានទិន្នន័យ', hi: 'अभी कोई डेटा नहीं', zh: '。' },
+  'vừa xong': { en: 'just now', th: 'เมื่อกี้', km: 'ទើបតែរួច', hi: 'अभी-अभी', zh: '' },
+  'trước': { en: 'ago', th: 'ที่แล้ว', km: 'មុន', hi: 'पहले', zh: '' },
+  'thất bại': { en: 'failed', th: 'ล้มเหลว', km: 'បរាជ័យ', hi: 'विफल', zh: '' },
+  'Bắt đầu với Muse Gateway': { en: 'Get started with Muse Gateway', th: 'เริ่มต้นกับ Muse Gateway', km: 'ចាប់ផ្តើមជាមួយ Muse Gateway', hi: 'Muse Gateway से शुरुआत करें', zh: 'Muse Gateway ' },
+  '3 bước để gateway sẵn sàng nhận request — làm lần lượt từ trên xuống.': {
+    en: '3 steps to get the gateway serving requests — work top to bottom.',
+    th: '3 ขั้นตอนให้เกตเวย์พร้อมรับคำขอ — ทำจากบนลงล่าง',
+    km: '៣ ជំហានដើម្បីឱ្យ gateway រួចរាល់ទទួលសំណើ — ធ្វើពីលើចុះក្រោម',
+    hi: 'गेटवे को अनुरोध सेवा के लिए तैयार करने के 3 कदम — ऊपर से नीचे करें',
+    zh: '3  —— 。',
+  },
+  'Thêm tài khoản Muse': { en: 'Add a Muse account', th: 'เพิ่มบัญชี Muse', km: 'បន្ថែមគណនី Muse', hi: 'Muse खाता जोड़ें', zh: ' Muse ' },
+  'Kích hoạt license': { en: 'Activate license', th: 'เปิดใช้ไลเซนส์', km: 'ធ្វើឱ្យសកម្មអាជ្ញាប័ណ្ណ', hi: 'लाइसेंस सक्रिय करें', zh: '' },
+  'Tạo API key & trỏ client': { en: 'Create an API key & point your client', th: 'สร้าง API key และชี้ client', km: 'បង្កើត API key & បញ្ជា client', hi: 'API key बनाएँ और क्लाइंट जोड़ें', zh: ' API ' },
+  'Vào tab {tab} — dán cookies tài khoản đầu tiên bằng bookmarklet hoặc browser extension.': {
+    en: 'Go to the {tab} tab — paste your first account cookies via bookmarklet or browser extension.',
+    th: 'ไปที่แท็บ {tab} — วางคุกกี้บัญชีแรกผ่าน bookmarklet หรือ browser extension',
+    km: 'ចូលទៅផ្ទាំង {tab} — បិទភ្ជាប់ cookies គណនីដំបូងតាម bookmarklet ឬ browser extension',
+    hi: '{tab} टैब पर जाएँ — bookmarklet या browser extension से अपने पहले खाते की cookies पेस्ट करें',
+    zh: ' {tab}  ——  bookmarklet  cookies。',
+  },
+  'Vào tab {tab} — nhập license key để mở Gateway API {api} và cấp tunnel URL riêng.': {
+    en: 'Go to the {tab} tab — enter your license key to unlock the Gateway API {api} and get a private tunnel URL.',
+    th: 'ไปที่แท็บ {tab} — ใส่ license key เพื่อเปิด Gateway API {api} และรับ tunnel URL ส่วนตัว',
+    km: 'ចូលទៅផ្ទាំង {tab} — បញ្ចូល license key ដើម្បីបើក Gateway API {api} និងទទួល tunnel URL ផ្ទាល់ខ្លួន',
+    hi: '{tab} टैब पर जाएँ — Gateway API {api} खोलने और निजी tunnel URL पाने के लिए license key डालें',
+    zh: ' {tab}  ——  Gateway API {api}  tunnel URL。',
+  },
+  'Mục {muc} trên trang Overview — tạo key rồi trỏ client vào {url}.': {
+    en: 'The {muc} section on Overview — create a key, then point your client to {url}.',
+    th: 'ส่วน {muc} ในหน้า Overview — สร้างคีย์แล้วชี้ client ไปที่ {url}',
+    km: 'ផ្នែក {muc} នៅទំព័រ Overview — បង្កើតកូនសោ រួចបញ្ជា client ទៅ {url}',
+    hi: 'Overview पेज पर {muc} सेक्शन — key बनाएँ, फिर क्लाइंट को {url} पर जोड़ें',
+    zh: 'Overview  {muc}  ——  {url}。',
+  },
+};
+
+export function tr(lang: Lang, key: string, vars?: Record<string, string | number>): string {
+  const e = DICT[key];
+  let s = !e
+    ? key
+    : lang === 'vi'
+      ? e.vi || key
+      : lang === 'zh'
+        ? ZH[key] || e.zh || e.en || key
+        : e[lang] || e.en || key;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+  return s;
+}
+
+interface LangCtx {
+  lang: Lang;
+  setLang: (l: Lang) => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}
+
+const LangContext = createContext<LangCtx>({ lang: 'en', setLang: () => {}, t: (k, v) => tr('en', k, v) });
+
+export function LangProvider({ children }: { children: React.ReactNode }) {
+  const [lang, setLangState] = useState<Lang>('en');
+
+  useEffect(() => {
+    const saved = (typeof localStorage !== 'undefined' && localStorage.getItem(LS_KEY)) as Lang | null;
+    if (saved && LANGS.some((l) => l.id === saved)) setLangState(saved);
+  }, []);
+
+  const setLang = useCallback((l: Lang) => {
+    setLangState(l);
+    try {
+      localStorage.setItem(LS_KEY, l);
+    } catch {}
+  }, []);
+
+  const t = useCallback(
+    (key: string, vars?: Record<string, string | number>) => tr(lang, key, vars),
+    [lang]
+  );
+
+  return <LangContext.Provider value={{ lang, setLang, t }}>{children}</LangContext.Provider>;
+}
+
+export function useT() {
+  return useContext(LangContext);
+}
