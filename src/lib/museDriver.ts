@@ -102,8 +102,11 @@ class MuseDriverService {
 
   resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    // Auto-close headless browser after 15 minutes of inactivity to save RAM
+    // Auto-close headless browser after 15 minutes of inactivity to save RAM.
+    // Never fire while a request is in flight — a long (10-min) generation
+    // must not have its browser killed mid-wait; re-arm instead.
     this.idleTimer = setTimeout(() => {
+      if (this.busy.size > 0) { this.resetIdleTimer(); return; }
       this.close();
     }, 15 * 60 * 1000);
   }
@@ -931,7 +934,10 @@ class MuseDriverService {
       // post-text grace period — generated media typically lands in the DOM
       // seconds after the reply text settles.
       const wantsMedia = /video|clip|ảnh|anh\b|image|hình|mp4|render|animation|tạo/i.test(cleanPrompt);
-      const TIMEOUT_MS = wantsMedia ? 240000 : 90000;
+      // Media renders can run for many minutes (10-min videos) — env-tunable
+      // for the rare case Muse needs even longer.
+      const mediaTimeoutMs = Math.max(60000, Number(process.env.MUSE_MEDIA_TIMEOUT_MS) || 900000);
+      const TIMEOUT_MS = wantsMedia ? mediaTimeoutMs : 90000;
       const MEDIA_GRACE_MS = wantsMedia ? 60000 : 0;
       let stableSince: number | null = null;
 
@@ -1141,6 +1147,7 @@ class MuseDriverService {
 
           const lines: string[] = [];
           let stop = false;
+          let busy = false;
           for (const chunk of chunks) {
             if (stop) break;
             for (const rawLine of String(chunk).split('\n')) {
@@ -1148,11 +1155,15 @@ class MuseDriverService {
               if (!t) continue;
               const low = t.toLowerCase();
               if (STOP_WORDS.has(low)) { stop = true; break; }
+              // Generation still in progress — status lines ("Rendering…",
+              // activity labels) are filtered from the reply but mark the
+              // wait busy so settled text can't end a long render early.
+              if (TRANSIENT.test(low) || ACTIVITY.test(low) || GERUND_LINE.test(low)) {
+                busy = true;
+                continue;
+              }
               if (
                 SKIP_WORDS.has(low) ||
-                TRANSIENT.test(low) ||
-                ACTIVITY.test(low) ||
-                GERUND_LINE.test(low) ||
                 TIME_RE.test(low) ||
                 !/[a-zA-ZÀ-ỹ0-9]/.test(t)
               ) {
@@ -1248,6 +1259,8 @@ class MuseDriverService {
               });
             }
             if (!inReplyRegion(el) || !isMediaAttachment(el)) continue;
+            // A <video> with no duration is still rendering/loading.
+            if (el instanceof HTMLVideoElement && !(el.duration > 0)) busy = true;
             if (attrSrc) { pushUrl(attrSrc, name); continue; }
             if (el instanceof HTMLVideoElement) { pushUrl(el.src || el.currentSrc, name); }
             else if (el instanceof HTMLSourceElement) pushUrl(el.src, name);
@@ -1262,9 +1275,16 @@ class MuseDriverService {
               }
             }
           }
+          // Spinners / progress bars inside the reply region also mean the
+          // generation is still running even when no status text matched.
+          const progEl = document.querySelector(
+            '[role="progressbar"], [aria-busy="true"], .animate-spin, .animate-pulse'
+          );
+          if (progEl && inReplyRegion(progEl)) busy = true;
           return {
             reply: lines.join('\n'),
             failed,
+            busy,
             media,
             mediaDbg,
             rcFound: !!replyContainer,
@@ -1281,7 +1301,7 @@ class MuseDriverService {
         if (!result) continue;
         const cleanText = result.reply ?? '';
         const media = result.media ?? [];
-        lastDbg = { rcFound: result.rcFound, lcaCls: result.lcaCls, bubCls: result.bubCls, bubTxt: result.bubTxt, idxB: result.idxB, groupsIdx: result.groupsIdx, mediaDbg: result.mediaDbg };
+        lastDbg = { rcFound: result.rcFound, busy: result.busy, lcaCls: result.lcaCls, bubCls: result.bubCls, bubTxt: result.bubTxt, idxB: result.idxB, groupsIdx: result.groupsIdx, mediaDbg: result.mediaDbg };
 
         // "Delivery not confirmed" means the realtime socket dropped the send —
         // resend the prompt a limited number of times instead of waiting out.
@@ -1344,10 +1364,13 @@ class MuseDriverService {
         }
 
         // Reply is done when content (text or media) has been stable for 3.5s.
-        // For media prompts with no media yet, keep waiting through the grace
-        // window instead of returning a bare text reply.
+        // Settled-looking text while the render is still running (status
+        // lines, video with no duration, a progress indicator) is NOT done —
+        // a 10-minute video must keep the wait alive until Muse finishes.
         const stable =
-          (lastText.length > 0 || lastMedia.length > 0) && Date.now() - lastChangeTime > 3500;
+          !result.busy &&
+          (lastText.length > 0 || lastMedia.length > 0) &&
+          Date.now() - lastChangeTime > 3500;
         if (stable) {
           if (stableSince === null) stableSince = Date.now();
           const graceOver = Date.now() - stableSince > MEDIA_GRACE_MS;
@@ -1392,7 +1415,7 @@ class MuseDriverService {
       try {
         const r = await fetch(u);
         const b = await r.blob();
-        if (!b.size || b.size > 64 * 1024 * 1024) return null;
+        if (!b.size || b.size > 512 * 1024 * 1024) return null;
         const buf = new Uint8Array(await b.arrayBuffer());
         let s = '';
         for (let i = 0; i < buf.length; i += 0x8000) {
