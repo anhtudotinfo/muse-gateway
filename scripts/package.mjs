@@ -33,6 +33,24 @@ fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(dist, { recursive: true });
 fs.cpSync(standalone, dist, { recursive: true });
 
+// Standalone emits hashed externals (e.g. puppeteer-core-<hash>) as junctions
+// under .next/node_modules. On Node <=20 fs.cpSync re-creates them as links;
+// npm pack then silently drops them and every puppeteer route 500s at
+// runtime. Resolve every link in the shipped tree into a real directory.
+const derefLinks = (d) => {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, e.name);
+    if (e.isSymbolicLink()) {
+      const real = fs.realpathSync(p);
+      fs.rmSync(p, { recursive: true, force: true });
+      fs.cpSync(real, p, { recursive: true });
+    } else if (e.isDirectory()) {
+      derefLinks(p);
+    }
+  }
+};
+derefLinks(dist);
+
 // Client-side static assets are NOT part of the standalone trace — copy.
 const staticSrc = path.join(root, '.next', 'static');
 if (fs.existsSync(staticSrc)) {
@@ -424,6 +442,20 @@ for (const item of ['server.js', '.next', 'node_modules', 'public', 'next.config
 for (const item of ['AGENTS.md', 'CLAUDE.md', 'README.txt']) {
   const src = path.join(dist, item);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(npmDist, item));
+}
+// Guard: hashed externals must ship as real dirs — npm pack silently drops
+// links, which once shipped a tarball that 500'd every puppeteer route.
+{
+  const nmAlias = path.join(npmApp, '.next', 'node_modules');
+  const entries = fs.existsSync(nmAlias) ? fs.readdirSync(nmAlias) : [];
+  if (entries.length === 0) {
+    throw new Error('packaging bug: app/.next/node_modules is missing — hashed externals would be absent from the tarball');
+  }
+  for (const e of entries) {
+    if (fs.lstatSync(path.join(nmAlias, e)).isSymbolicLink()) {
+      throw new Error(`packaging bug: app/.next/node_modules/${e} is still a link — dereference before packing`);
+    }
+  }
 }
 // Fresh icon for the npm tray too.
 if (fs.existsSync(path.join(trayDir, 'icon.ico'))) {
