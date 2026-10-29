@@ -40,7 +40,7 @@ jobs:
         run: npm ci
 
       - name: Build + package (produces dist/npm/muse-gateway + tgz)
-        run: node scripts/package.mjs
+        run: npm run package
 
       - name: Publish to npm
         working-directory: dist/npm/muse-gateway
