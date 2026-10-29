@@ -36,14 +36,17 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
+      # OIDC trusted publishing needs npm >= 11.5.1. npm@12+ requires
+      # node >=22, so pin npm@11 for the node 20 toolchain. Runs BEFORE
+      # the 10-minute build so a failure surfaces in seconds.
+      - name: Upgrade npm (OIDC needs >= 11.5.1)
+        run: npm install -g npm@11
+
       - name: Install deps
         run: npm ci
 
       - name: Build + package (produces dist/npm/muse-gateway + tgz)
         run: npm run package
-
-      - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
-        run: npm install -g npm@latest
 
       - name: Publish to npm
         working-directory: dist/npm/muse-gateway
