@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
     }
     const ua = req.headers.get('user-agent');
     const keyName = apiKey === 'open' ? 'open' : apiKey.name;
+    // Idempotency: same opt-in contract as /v1/chat/completions — a retried
+    // task must not re-post its prompt into the thread.
+    const idem: string | null =
+      (body as any).idempotency_key ?? (body as any).task_id ?? (body as any).task ?? null;
     const stream = body.stream ?? true;
     const prompt = extractPromptFromResponseInput(body.input || body.messages || body.prompt);
 
@@ -186,6 +190,7 @@ export async function POST(req: NextRequest) {
                 ua,
                 keyName,
                 endpoint: '/v1/responses',
+                idem,
               });
               replyText = r.text;
               replyMedia = r.media;
@@ -199,6 +204,7 @@ export async function POST(req: NextRequest) {
                 ua,
                 keyName,
                 endpoint: '/v1/responses',
+                idem,
                 onChunk: (chunk: string) => {
                   replyText += chunk;
                   sendEvent('response.output_text.delta', {
@@ -352,6 +358,7 @@ export async function POST(req: NextRequest) {
       ua,
       keyName,
       endpoint: '/v1/responses',
+      idem,
     });
     const origin = publicOrigin(req);
     const content = media.length

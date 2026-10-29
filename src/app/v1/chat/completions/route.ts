@@ -40,6 +40,10 @@ export async function POST(req: NextRequest) {
     // that created it.
     const thread: string | null = (body as any).thread ?? (body as any).thread_id ?? null;
     const pinAccount: string | null = (body as any).account ?? (body as any).account_id ?? null;
+    // Idempotency: a retried task must not re-post its prompt — the pool
+    // coalesces on this key and the driver resumes the in-flight reply.
+    const idem: string | null =
+      (body as any).idempotency_key ?? (body as any).task_id ?? (body as any).task ?? null;
 
     // Per-key access restriction: key may only call allow-listed models/combos
     if (!apiKeyService.allowsModel(apiKey, model)) {
@@ -124,6 +128,7 @@ export async function POST(req: NextRequest) {
               newChat: new_chat,
               thread,
               pinAccount,
+              idem,
               onChunk: (chunk: string) => {
                 const ssePayload = {
                   id: completionId,
@@ -224,6 +229,7 @@ export async function POST(req: NextRequest) {
       newChat: new_chat,
       thread,
       pinAccount,
+      idem,
     });
     const origin = publicOrigin(req);
     const content =

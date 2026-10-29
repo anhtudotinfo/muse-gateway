@@ -35,6 +35,15 @@ export interface ChatOptions {
    *  Thread continuation only works on the account that owns the thread,
    *  so the pool must not fall over to a different account. */
   pinAccount?: string | null;
+  /** Idempotency key from the client (e.g. the task id). The pool uses it
+   *  to coalesce retries of the SAME job — a client abort cannot cancel a
+   *  prompt once it is inside Muse, so retrying without dedupe posts the
+   *  prompt twice and burns a second generation. */
+  idem?: string | null;
+  /** Internal — set by the pool when this idem key was attempted before:
+   *  the driver then checks whether the prompt is already sitting in the
+   *  thread and resumes the in-flight reply instead of re-sending. */
+  resume?: boolean | null;
 }
 
 /** A media element found in a Muse reply — may be a blob: URL (page-local). */
@@ -205,7 +214,7 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null }: ChatOptions): Promise<ChatResult> {
     const session = this.resolveSession(sessionId);
 
     // Serialize per account — different accounts run in parallel. Requests
@@ -263,7 +272,7 @@ class MuseDriverService {
         // follow-up prompts and must not re-send the bridge frame.
         const result = await this.sendAndAwaitReply(page, toSend, signal, (d) => {
           buffered += d;
-        }, round === 0 ? images : undefined);
+        }, round === 0 ? images : undefined, !!(resume && round === 0));
 
         if (result.text) lastReply = result.text;
         if (result.media.length) lastMedia = result.media;
@@ -682,7 +691,8 @@ class MuseDriverService {
     cleanPrompt: string,
     signal: AbortSignal | null,
     onChunk: ((delta: string) => void) | null,
-    images?: string[]
+    images?: string[],
+    resume = false
   ): Promise<ChatResult> {
     try {
       console.log('[MuseDriver] Sending clean prompt to Muse:', cleanPrompt.slice(0, 100));
@@ -853,28 +863,61 @@ class MuseDriverService {
         // 2. Submit the message once by pressing Enter
         await page.keyboard.press('Enter');
       };
+      // Resume probe: a client abort can't retract a prompt once it is
+      // inside Muse — retrying then re-sends the whole thing and burns a
+      // second generation (the duplicate-bubble bug). When the pool marks
+      // this as a retried idem key, check whether the newest user bubble
+      // already carries this exact prompt; if so we skip the send and just
+      // wait for the reply the first submission is/was generating.
+      const alreadyPosted = resume
+        ? await page
+            .evaluate((rawPrompt: string) => {
+              const norm = (s: string | null | undefined) =>
+                (s || '').replace(/\s+/g, ' ').trim();
+              const target = norm(rawPrompt);
+              const snip = norm(rawPrompt.slice(0, 40));
+              const tail = norm(rawPrompt.slice(-40));
+              const groups = Array.from(
+                document.querySelectorAll('[class*="group/msg"]')
+              ).filter((el) => !(el as HTMLElement).querySelector('textarea'));
+              for (let i = groups.length - 1; i >= 0; i--) {
+                const t = norm((groups[i] as HTMLElement).innerText);
+                if (t === target || t.includes(snip) || t.includes(tail)) return true;
+              }
+              return false;
+            }, cleanPrompt)
+            .catch(() => false)
+        : false;
+
       // Snapshot every media URL already on the page (avatar, older replies)
       // — anything still there was rendered before our prompt and can never
-      // belong to this reply.
-      await page.evaluate(() => {
-        (window as any).__musePreMedia = new Set(
-          Array.from(
-            document.querySelectorAll(
-              'video, source, img, a[href], [data-hatch-video-src], [data-hatch-image-src], [data-hatch-audio-src]'
-            )
-          ).flatMap((el: Element) =>
-            [
-              (el as HTMLVideoElement).src,
-              (el as HTMLVideoElement).currentSrc,
-              (el as HTMLAnchorElement).href,
-              el.getAttribute('data-hatch-video-src'),
-              el.getAttribute('data-hatch-image-src'),
-              el.getAttribute('data-hatch-audio-src'),
-            ].filter(Boolean)
-          )
-        );
-      });
-      await sendOnce();
+      // belong to this reply. When resuming, media rendered so far MAY be
+      // the interrupted reply's attachments — leave the set empty instead.
+      await page.evaluate((resuming: boolean) => {
+        (window as any).__musePreMedia = resuming
+          ? new Set()
+          : new Set(
+              Array.from(
+                document.querySelectorAll(
+                  'video, source, img, a[href], [data-hatch-video-src], [data-hatch-image-src], [data-hatch-audio-src]'
+                )
+              ).flatMap((el: Element) =>
+                [
+                  (el as HTMLVideoElement).src,
+                  (el as HTMLVideoElement).currentSrc,
+                  (el as HTMLAnchorElement).href,
+                  el.getAttribute('data-hatch-video-src'),
+                  el.getAttribute('data-hatch-image-src'),
+                  el.getAttribute('data-hatch-audio-src'),
+                ].filter(Boolean)
+              )
+            );
+      }, alreadyPosted);
+      if (alreadyPosted) {
+        console.log('[MuseDriver] prompt already posted — resuming interrupted generation (no duplicate send)');
+      } else {
+        await sendOnce();
+      }
 
       let streamIndex = 0;
       let lastText = '';

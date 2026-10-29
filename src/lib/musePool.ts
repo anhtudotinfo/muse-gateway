@@ -354,7 +354,50 @@ class MusePoolService {
     return 'transient';
   }
 
+  // Idempotency: a client abort cannot retract a prompt once posted to
+  // Muse — the generation keeps running with nobody to collect it, and a
+  // naive retry re-posts the same prompt (duplicate bubbles, double cost).
+  // Callers send their task id as `idem`; the pool then coalesces retries:
+  //   - still in-flight → attach to the same promise (no second drive)
+  //   - finished while orphaned → return the cached result
+  //   - failed/aborted → re-drive with resume, so the driver collects the
+  //     reply from the existing bubble instead of posting a duplicate
+  private idemInflight = new Map<string, Promise<ChatResult>>();
+  private idemDone = new Map<string, { result: ChatResult; at: number }>();
+  private idemSeen = new Set<string>();
+  private readonly IDEM_TTL_MS = 60 * 60 * 1000;
+
   async chat(opts: ChatOptions): Promise<ChatResult> {
+    const key = typeof opts.idem === 'string' && opts.idem ? `idem:${opts.idem}` : null;
+    if (!key) return this.chatDispatch(opts);
+    const inflight = this.idemInflight.get(key);
+    if (inflight) {
+      console.log(`[MusePool] idem ${opts.idem} — coalescing onto in-flight request`);
+      return inflight;
+    }
+    const done = this.idemDone.get(key);
+    if (done) {
+      if (Date.now() - done.at < this.IDEM_TTL_MS) {
+        console.log(`[MusePool] idem ${opts.idem} — returning cached result`);
+        return done.result;
+      }
+      this.idemDone.delete(key);
+    }
+    // Attempted before with no live/cached outcome → this is a retry.
+    if (this.idemSeen.has(key)) opts = { ...opts, resume: true };
+    this.idemSeen.add(key);
+    const run = this.chatDispatch(opts);
+    this.idemInflight.set(key, run);
+    try {
+      const result = await run;
+      this.idemDone.set(key, { result, at: Date.now() });
+      return result;
+    } finally {
+      this.idemInflight.delete(key);
+    }
+  }
+
+  private async chatDispatch(opts: ChatOptions): Promise<ChatResult> {
     this.load();
 
     // Pinned request — thread continuation only works on the account that
