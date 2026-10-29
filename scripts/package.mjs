@@ -223,18 +223,34 @@ const walkJs = (d) => {
   }
 };
 walkJs(serverDir);
+// Chunks that inject functions into the browser page (page.evaluate,
+// waitForFunction, evaluateOnNewDocument, ...) can only get transforms
+// that keep every function body self-contained: any transform that
+// hoists literals/vars into shared module-scope helpers (string-array
+// decoders, simplifier merges, control-flow dispatcher objects) leaves
+// references inside the serialized function → "is not defined" inside
+// the page (e.g. "_0x2dc5bb is not defined"). Identifier renaming +
+// compaction are safe: they preserve scope. Everything else stays off.
+const PAGE_CTX_RE =
+  /\.(evaluate|evaluateOnNewDocument|waitForFunction|exposeFunction|addInitScript)\s*\(/;
 for (const f of obfuscatable) {
   if (!fs.existsSync(f)) continue;
-  execSync(
-    `npx --yes javascript-obfuscator@4.1.1 "${f}" --output "${f}" --target node --compact true ` +
-      `--control-flow-flattening true --control-flow-flattening-threshold 0.5 ` +
+  const pageCtx = PAGE_CTX_RE.test(fs.readFileSync(f, 'utf8'));
+  const opts = pageCtx
+    ? `--string-array false --split-strings false --self-defending false ` +
+      `--control-flow-flattening false --simplify false ` +
+      `--identifier-names-generator hexadecimal --rename-globals false ` +
+      `--numbers-to-expressions true`
+    : `--control-flow-flattening true --control-flow-flattening-threshold 0.5 ` +
       `--string-array true --string-array-encoding base64 --string-array-threshold 0.9 ` +
       `--split-strings true --split-strings-chunk-length 8 ` +
       `--identifier-names-generator hexadecimal --rename-globals false ` +
-      `--self-defending true --simplify true --numbers-to-expressions true`,
+      `--self-defending true --simplify true --numbers-to-expressions true`;
+  execSync(
+    `npx --yes javascript-obfuscator@4.1.1 "${f}" --output "${f}" --target node --compact true ${opts}`,
     { stdio: 'inherit' }
   );
-  console.log(`  obfuscated ${path.relative(dist, f)}`);
+  console.log(`  obfuscated ${path.relative(dist, f)}${pageCtx ? ' (page-context profile)' : ''}`);
 }
 
 // Integrity manifest: sha256 over server.js + every .next/server file. The
