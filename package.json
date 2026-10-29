@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/postbuild.mjs",
     "start": "next start",
     "server": "node server.cjs",
     "license:gen": "node scripts/gen-license.mjs",

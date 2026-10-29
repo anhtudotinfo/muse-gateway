@@ -60,26 +60,6 @@ export function Sidebar({ profileCount, update }: SidebarProps) {
           <div className="router-brand-name">Muse Pool</div>
           <div className="router-brand-ver">v1.0</div>
         </div>
-        <select
-          aria-label="Language"
-          value={lang}
-          onChange={(e) => setLang(e.target.value as Lang)}
-          style={{
-            marginLeft: 'auto',
-            background: 'var(--surface-2, #1d1d28)',
-            color: 'var(--text-muted, #9a9aad)',
-            border: '1px solid var(--border, #2a2a38)',
-            borderRadius: 7,
-            fontSize: 11,
-            padding: '3px 6px',
-            cursor: 'pointer',
-            maxWidth: 78,
-          }}
-        >
-          {LANGS.map((l) => (
-            <option key={l.id} value={l.id}>{l.label}</option>
-          ))}
-        </select>
       </div>
 
       <nav className="router-nav" role="tablist">
@@ -102,6 +82,42 @@ export function Sidebar({ profileCount, update }: SidebarProps) {
       </nav>
 
       <div className="router-sidebar-footer">
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            marginBottom: 9,
+            padding: '5px 8px',
+            border: '1px solid var(--border, #2a2a38)',
+            borderRadius: 8,
+            background: 'var(--surface-2, #1d1d28)',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ opacity: 0.7, flexShrink: 0 }}>
+            <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+          <select
+            aria-label="Language"
+            value={lang}
+            onChange={(e) => setLang(e.target.value as Lang)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: 'transparent',
+              color: 'var(--text, #e6e6f0)',
+              colorScheme: 'dark',
+              border: 'none',
+              outline: 'none',
+              fontSize: 11.5,
+              cursor: 'pointer',
+            }}
+          >
+            {LANGS.map((l) => (
+              <option key={l.id} value={l.id} style={{ background: '#1d1d28', color: '#e6e6f0' }}>{l.label}</option>
+            ))}
+          </select>
+        </div>
         <span className="status-dot" />
         localhost:1412{update?.current ? ` · v${update.current}` : ' · /v1 ready'}
         {update?.updateAvailable && update.latest && (

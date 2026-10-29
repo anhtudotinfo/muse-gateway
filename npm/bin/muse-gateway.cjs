@@ -26,7 +26,10 @@ const DATA_DIR = path.join(os.homedir(), '.muse-gateway');
 const PID_FILE = path.join(DATA_DIR, 'muse-gateway.pid');
 const LOG_FILE = path.join(DATA_DIR, 'server.log');
 const PORT = process.env.MUSE_PORT || process.env.PORT || '1412';
-const BASE = `http://localhost:${PORT}`;
+// Server binds 127.0.0.1 (IPv4 loopback). Advertise that exact address —
+// `localhost` can resolve to ::1 on IPv6 machines where Chrome's fallback
+// to IPv4 is not guaranteed, producing a refused connection.
+const BASE = `http://127.0.0.1:${PORT}`;
 const REG_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const REG_NAME = 'MuseGateway';
 const PKG_VERSION = (() => {
