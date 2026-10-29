@@ -55,6 +55,14 @@ function Set-Tooltip($text) {
   $script:notifyIcon.Text = $text
 }
 
+function Show-Balloon($title, $text, $ms) {
+  if (-not $ms) { $ms = 6000 }
+  $script:notifyIcon.BalloonTipTitle = $title
+  $script:notifyIcon.BalloonTipText = $text
+  $script:notifyIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+  $script:notifyIcon.ShowBalloonTip($ms)
+}
+
 # Timer polls stdin on the UI thread — Peek() avoids blocking the message loop.
 $script:timer = New-Object System.Windows.Forms.Timer
 $script:timer.Interval = 100
@@ -68,6 +76,7 @@ $script:timer.Add_Tick({
         "add-item"    { Add-MenuItem $cmd.index $cmd.title $cmd.enabled }
         "update-item" { Update-MenuItem $cmd.index $cmd.title $cmd.enabled }
         "set-tooltip" { Set-Tooltip $cmd.text }
+        "balloon"     { Show-Balloon $cmd.title $cmd.text $cmd.ms }
         "ready"       { Write-Event @{ type = "ready" } }
         "kill"        {
           $script:notifyIcon.Visible = $false

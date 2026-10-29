@@ -52,6 +52,7 @@ function startTray({ ps1Path, iconPath, tooltip, items, onClick, onExit }) {
   return {
     updateItem: (i, title, enabled = true) => send(ps, { action: 'update-item', index: i, title, enabled }),
     setTooltip: (text) => send(ps, { action: 'set-tooltip', text }),
+    balloon: (title, text, ms) => send(ps, { action: 'balloon', title, text, ms }),
     kill() {
       send(ps, { action: 'kill' });
       setTimeout(() => {

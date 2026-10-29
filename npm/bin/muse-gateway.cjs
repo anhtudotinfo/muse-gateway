@@ -163,7 +163,7 @@ function readPid() {
 function stopInstance() {
   const pid = readPid();
   if (!pid) {
-    console.log('Không thấy instance nào đang chạy (không có pid file).');
+    console.log('No running instance found (no pid file).');
     return false;
   }
   try {
@@ -176,7 +176,7 @@ function stopInstance() {
     }
   }
   fs.rmSync(PID_FILE, { force: true });
-  console.log('Muse Gateway đã dừng.');
+  console.log('Muse Gateway stopped.');
   return true;
 }
 
@@ -199,10 +199,10 @@ function waitReady(timeoutMs = 30000) {
 }
 
 /** Spawn the server as a detached background worker (logs → server.log). */
-function spawnBackground() {
+function spawnBackground(extraArgs = []) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const logFd = fs.openSync(LOG_FILE, 'a');
-  const child = spawn(process.execPath, [__filename, '--serve'], {
+  const child = spawn(process.execPath, [__filename, '--serve', ...extraArgs], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     windowsHide: true,
@@ -213,9 +213,9 @@ function spawnBackground() {
 }
 
 /** Ensure a server is reachable — spawn a background worker if needed. */
-async function ensureRunning() {
+async function ensureRunning(extraArgs = []) {
   if (await getStatus()) return true;
-  spawnBackground();
+  spawnBackground(extraArgs);
   return waitReady();
 }
 
@@ -243,9 +243,9 @@ async function serve() {
 
   fs.writeFileSync(PID_FILE, String(process.pid));
   const ok = await waitReady();
-  console.log(`Muse Gateway ${ok ? 'đang chạy' : 'đang khởi động'} — ${BASE}`);
+  console.log(`Muse Gateway ${ok ? 'running' : 'starting'} — ${BASE}`);
   console.log(`Data: ${DATA_DIR}`);
-  if (!ok) console.log('Chưa thấy server phản hồi — kiểm tra lại sau vài giây.');
+  if (!ok) console.log('Server not responding yet — check again in a few seconds.');
 
   let tray = null;
   const wantTray = process.platform === 'win32' && !flag('--no-tray');
@@ -279,10 +279,22 @@ async function serve() {
         },
         onExit: () => {},
       });
+      // Spawned by "Hide to Tray": confirm via balloon that the terminal can
+      // be closed — the worker keeps running detached.
+      if (flag('--notify')) {
+        setTimeout(() => {
+          try {
+            tray.balloon(
+              'Muse Gateway',
+              `Running in the background at ${BASE} — you can close this window.`
+            );
+          } catch {}
+        }, 800);
+      }
       process.on('SIGINT', () => shutdown(0));
       process.on('SIGTERM', () => shutdown(0));
     } catch (e) {
-      console.log('Tray không khởi động được:', e?.message || e);
+      console.log('Tray failed to start:', e?.message || e);
     }
   }
 }
@@ -357,11 +369,11 @@ async function interactiveMenu() {
     const statusText = status
       ? status.licensed
         ? C.green(`● running — ${status.type}${status.expiresAt ? ` (exp ${status.expiresAt.slice(0, 10)})` : ''}`)
-        : C.yellow('● running — community (chưa kích hoạt)')
+        : C.yellow('● running — community (not activated)')
       : C.dim('○ stopped');
     lines.push(C.bold(`  Muse Gateway  v${PKG_VERSION}`));
     lines.push(`  Server:  ${C.cyan(BASE)}   ${statusText}`);
-    if (status && !status.licensed) lines.push(`  ${C.yellow('Mua key:')} ${C.cyan('https://www.storetiki.online')}`);
+    if (status && !status.licensed) lines.push(`  ${C.yellow('Get a license:')} ${C.cyan('https://www.storetiki.online')}`);
     lines.push(C.cyan(bar));
     items.forEach((it, i) => {
       lines.push(i === sel ? C.cyan(`> ${it.label}`) : `  ${it.label}`);
@@ -377,7 +389,7 @@ async function interactiveMenu() {
       { label: 'Open Dashboard (Web UI)', act: 'open' },
       { label: 'Hide to Tray (Background)', act: 'tray' },
       { label: 'Run in this terminal (foreground)', act: 'fg' },
-      { label: status?.licensed ? `License: ${status.email || status.type} — đổi key khác` : 'Enter License Key…', act: 'key' }
+      { label: status?.licensed ? `License: ${status.email || status.type} — change key` : 'Enter License Key…', act: 'key' }
     );
     if (status) items.push({ label: 'Stop Server', act: 'stop' });
     items.push({ label: 'Exit', act: 'exit' });
@@ -426,30 +438,30 @@ async function interactiveMenu() {
         break;
 
       case 'open': {
-        process.stdout.write('\nĐang mở dashboard…\n');
+        process.stdout.write('\nOpening dashboard…\n');
         if (!(await ensureRunning())) {
-          console.log(C.yellow('Server chưa phản hồi — xem log: ' + LOG_FILE));
+          console.log(C.yellow('Server not responding — see log: ' + LOG_FILE));
         }
         openBrowser();
         break;
       }
 
       case 'tray': {
-        process.stdout.write('\nĐang khởi động server nền + tray…\n');
-        const ok = await ensureRunning();
+        process.stdout.write('\nStarting background server + tray…\n');
+        const ok = await ensureRunning(['--notify']);
         if (ok) {
-          console.log(C.green(`Muse Gateway chạy nền tại ${BASE}`));
-          console.log('Icon đã có trong system tray — có thể đóng cửa sổ này.');
+          console.log(C.green(`Muse Gateway is running in the background at ${BASE}`));
+          console.log('Tray icon added — you can close this window.');
           console.log(C.dim(`Log: ${LOG_FILE}`));
         } else {
-          console.log(C.yellow('Server chưa phản hồi — xem log: ' + LOG_FILE));
+          console.log(C.yellow('Server not responding — see log: ' + LOG_FILE));
         }
         process.exit(0);
         break;
       }
 
       case 'fg': {
-        console.log(`\nChạy foreground tại ${BASE} — Ctrl+C để dừng.\n`);
+        console.log(`\nRunning in foreground at ${BASE} — Ctrl+C to stop.\n`);
         await serve();
         return; // serve never returns; keep process alive
       }
@@ -457,18 +469,18 @@ async function interactiveMenu() {
       case 'key': {
         process.stdout.write('\n');
         if (!(await ensureRunning())) {
-          console.log(C.yellow('Không kết nối được server — kiểm tra ' + LOG_FILE));
+          console.log(C.yellow('Cannot reach the server — check ' + LOG_FILE));
           break;
         }
-        const key = await question('Dán license key (MUSE1.…): ');
+        const key = await question('Paste license key (MUSE1.…): ');
         if (!key) break;
         const r = await postJson(`${BASE}/api/license`, { action: 'activate', licenseKey: key });
         if (r?.body?.licensed) {
-          console.log(C.green(`✓ Kích hoạt thành công — ${r.body.email || 'pro'}${r.body.expiresAt ? `, hết hạn ${r.body.expiresAt.slice(0, 10)}` : ''}`));
+          console.log(C.green(`✓ Activation successful — ${r.body.email || 'pro'}${r.body.expiresAt ? `, expires ${r.body.expiresAt.slice(0, 10)}` : ''}`));
         } else {
-          console.log(C.yellow(`✗ Kích hoạt thất bại: ${r?.body?.error || `HTTP ${r?.status || '?'}`}`));
+          console.log(C.yellow(`✗ Activation failed: ${r?.body?.error || `HTTP ${r?.status || '?'}`}`));
         }
-        console.log('\nNhấn phím bất kỳ để về menu…');
+        console.log('\nPress any key to return to the menu…');
         await anyKey();
         break;
       }
@@ -480,20 +492,20 @@ async function interactiveMenu() {
       }
 
       case 'update': {
-        process.stdout.write(`\nĐang cài muse-gateway v${latest}…\n`);
+        process.stdout.write(`\nInstalling muse-gateway v${latest}…\n`);
         try {
           const upd = spawn('npm', ['i', '-g', 'muse-gateway'], { stdio: 'inherit', shell: true });
           upd.on('error', () => {
-            console.log('Update thất bại — chạy tay: npm i -g muse-gateway');
+            console.log('Update failed — run manually: npm i -g muse-gateway');
             process.exit(0);
           });
           upd.on('exit', () => {
-            console.log('\nCập nhật xong — chạy lại `muse-gateway`.');
+            console.log('\nUpdate complete — run `muse-gateway` again.');
             process.exit(0);
           });
           return; // npm takes over the terminal
         } catch {
-          console.log('Update thất bại — chạy tay: npm i -g muse-gateway');
+          console.log('Update failed — run manually: npm i -g muse-gateway');
         }
         break;
       }
@@ -518,12 +530,13 @@ async function interactiveMenu() {
 if (flag('--help') || flag('-h')) {
   console.log(`Muse Gateway CLI
 
-  muse-gateway            menu tương tác (mũi tên + enter)
-  muse-gateway --serve    chạy server ở foreground (dùng nội bộ)
-  muse-gateway stop       dừng instance đang chạy nền
-  muse-gateway --open     mở dashboard
-  MUSE_PORT=xxxx muse-gateway  đổi port (mặc định 1412)
-  MUSE_BIND=0.0.0.0 muse-gateway  mở truy cập từ LAN (mặc định chỉ localhost)
+  muse-gateway            interactive menu (arrows + enter)
+  muse-gateway --serve    run the server in the foreground (internal/worker)
+  muse-gateway stop       stop a running background instance
+  muse-gateway --open     open the dashboard
+  npx muse-gateway        works even when npm's global bin dir is not on PATH
+  MUSE_PORT=xxxx muse-gateway  change port (default 1412)
+  MUSE_BIND=0.0.0.0 muse-gateway  allow LAN access (default: localhost only)
 
 Data:  ${DATA_DIR}
 Log:   ${LOG_FILE}`);
@@ -540,12 +553,12 @@ else if (flag('--open')) {
   ensureRunning().then(openBrowser);
 } else if (flag('--serve') || flag('--tray') || !process.stdin.isTTY) {
   serve().catch((e) => {
-    console.error('Lỗi khởi động:', e?.message || e);
+    console.error('Startup error:', e?.message || e);
     process.exit(1);
   });
 } else {
   interactiveMenu().catch((e) => {
-    console.error('Lỗi menu:', e?.message || e);
+    console.error('Menu error:', e?.message || e);
     process.exit(1);
   });
 }
