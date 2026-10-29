@@ -49,11 +49,12 @@ const fetchSettings = async () => {
 
 const patchSettings = async (patch: Record<string, unknown>) => {
   try {
-    await fetch('/api/settings', {
+    const res = await fetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
+    if (res.ok) return await res.json();
   } catch { /* backend pending — local state still updated by caller */ }
   return patch;
 };
@@ -75,6 +76,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   const [requireLogin, setRequireLogin] = useState(true);
   const [hasPassword, setHasPassword] = useState(true);
   const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);
+  const [dashboardToken, setDashboardToken] = useState('');
 
   // Cloudflare Tunnel state
   const [tunnelChecking, setTunnelChecking] = useState(true);
@@ -296,6 +298,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
         setRequireLogin(settingsData.requireLogin !== false);
         setHasPassword(settingsData.hasPassword || false);
         setTunnelDashboardAccess(settingsData.tunnelDashboardAccess || false);
+        setDashboardToken(settingsData.dashboardToken || '');
       }
       if (statusRes?.ok) {
         const data = await safeJson(statusRes);
@@ -321,7 +324,10 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
 
   const handleTunnelDashboardAccess = async (value: boolean) => {
     const updated = await patchSettings({ tunnelDashboardAccess: value });
-    if (updated) setTunnelDashboardAccess(value);
+    if (updated) {
+      setTunnelDashboardAccess(value);
+      if (updated.dashboardToken) setDashboardToken(updated.dashboardToken);
+    }
   };
 
   const handleRequireApiKey = async (value: boolean) => {
@@ -1188,15 +1194,31 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
 
         {/* Tunnel dashboard access option */}
         {(tunnelEnabled || tsEnabled) && (
-          <div className="mt-4 pt-4 border-t border-border flex items-center gap-3">
-            <Toggle
-              checked={tunnelDashboardAccess}
-              onChange={() => handleTunnelDashboardAccess(!tunnelDashboardAccess)}
-            />
-            <div className="flex items-center gap-1.5">
-              <p className="font-medium text-sm">Allow dashboard access via tunnel</p>
-              <HelpTooltip text="When enabled, the dashboard can be accessed through your tunnel or Tailscale URL (login still required). When disabled, dashboard access via tunnel/Tailscale is completely blocked." />
+          <div className="mt-4 pt-4 border-t border-border">
+            <div className="flex items-center gap-3">
+              <Toggle
+                checked={tunnelDashboardAccess}
+                onChange={() => handleTunnelDashboardAccess(!tunnelDashboardAccess)}
+              />
+              <div className="flex items-center gap-1.5">
+                <p className="font-medium text-sm">Allow dashboard access via tunnel</p>
+                <HelpTooltip text="Dashboard chỉ mở từ xa bằng link mở khóa riêng (đặt cookie đăng nhập một lần). Ai không có link vẫn bị chặn — giữ link này bí mật như API key." />
+              </div>
             </div>
+            {tunnelDashboardAccess && dashboardToken && (tunnelPublicUrl || tsUrl) && (
+              <div className="mt-2 ml-[52px] flex items-center gap-2">
+                <code className="text-xs bg-surface-2 border border-border rounded px-2 py-1 text-text-muted truncate max-w-[420px]">
+                  {`${(tunnelPublicUrl || tsUrl).replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`}
+                </code>
+                <button
+                  type="button"
+                  className="text-xs text-primary hover:underline shrink-0"
+                  onClick={() => copyWithToast(`${(tunnelPublicUrl || tsUrl).replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`, 'dgk', 'dashboard access link')}
+                >
+                  Copy link mở khóa
+                </button>
+              </div>
+            )}
           </div>
         )}
       </Card>

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
 import { musePool } from '@/lib/musePool';
 import { apiKeyService } from '@/lib/apiKeys';
+import { isRemoteHeaders } from '@/lib/remoteDetect';
 import { licenseGate } from '@/lib/licenseGate';
 
 const corsHeaders = {
@@ -27,13 +28,19 @@ export async function GET(req: Request) {
   let data = [...SUPPORTED_MODELS, ...comboModels];
 
   // When a restricted key is supplied, expose only its allow-listed models.
-  // Unauthenticated calls (dashboard model picker) get the full list.
+  // Unauthenticated LOCAL calls (dashboard model picker) get the full list;
+  // remote callers always need a valid key — including when zero keys exist.
   const auth = req.headers.get('authorization') || req.headers.get('x-api-key');
-  if (auth) {
-    const key = apiKeyService.resolveKey(auth);
-    if (key && key !== 'open' && key.access?.restricted) {
-      data = data.filter((m) => apiKeyService.allowsModel(key, m.id));
-    }
+  const remote = isRemoteHeaders(req.headers);
+  const key = apiKeyService.resolveKey(auth, remote);
+  if (remote && key === null) {
+    return NextResponse.json(
+      { error: { message: 'Invalid or missing API key.', type: 'authentication_error' } },
+      { status: 401, headers: corsHeaders }
+    );
+  }
+  if (key && key !== 'open' && key.access?.restricted) {
+    data = data.filter((m) => apiKeyService.allowsModel(key, m.id));
   }
 
   return NextResponse.json(

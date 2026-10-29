@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
@@ -12,6 +13,10 @@ export interface AppSettings {
   requireLogin: boolean;
   hasPassword: boolean;
   tunnelDashboardAccess: boolean;
+  /** Secret token gating remote dashboard access — the unlock link
+   *  <publicUrl>/?dgk=<token> sets an HttpOnly cookie. Server-generated,
+   *  never client-settable via patch(). */
+  dashboardToken?: string;
   keepAliveEnabled: boolean;
   keepAliveMin: number;
   maskEmails: boolean;
@@ -53,6 +58,18 @@ class SettingsService {
   get(): AppSettings {
     this.load();
     return { ...this.settings };
+  }
+
+  /** Lazily mint (or return) the remote-dashboard unlock token. Called when
+   *  tunnelDashboardAccess is on but no token exists yet — without it the
+   *  toggle would open the dashboard with zero credentials. */
+  ensureDashboardToken(): string {
+    this.load();
+    if (!this.settings.dashboardToken) {
+      this.settings.dashboardToken = crypto.randomBytes(24).toString('base64url');
+      this.save();
+    }
+    return this.settings.dashboardToken;
   }
 
   patch(patch: Partial<AppSettings>): AppSettings {

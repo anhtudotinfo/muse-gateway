@@ -114,17 +114,23 @@ class ApiKeyService {
   /**
    * Resolve the Bearer/x-api-key token to a key record.
    * Returns the matched ApiKeyRecord, or 'open' when auth is not enforced
-   * (toggle off or no enabled keys), or null when a key is required but
-   * missing/invalid.
+   * (toggle off, or no enabled keys on a LOCAL request), or null when a key
+   * is required but missing/invalid. Remote callers get no zero-key grace
+   * period: requireAuth on + zero keys = closed, so exposing /v1 through a
+   * tunnel is never accidentally public.
    */
-  resolveKey(authHeader: string | null): ApiKeyRecord | 'open' | null {
+  resolveKey(authHeader: string | null, remote = false): ApiKeyRecord | 'open' | null {
     this.load();
     if (!this.requireAuth) return 'open';
     const active = this.keys.filter((k) => k.enabled);
-    if (active.length === 0) return 'open';
+    if (active.length === 0) return remote ? null : 'open';
     const token = (authHeader || '').replace(/^Bearer\s+/i, '').trim();
     if (!token) return null;
-    const match = active.find((k) => k.key === token);
+    const tb = Buffer.from(token);
+    const match = active.find((k) => {
+      const kb = Buffer.from(k.key);
+      return kb.length === tb.length && crypto.timingSafeEqual(kb, tb);
+    });
     if (!match) return null;
     // Persist throttled — every authenticated request shouldn't rewrite the
     // file (churns disk + trips dev-server file watchers).

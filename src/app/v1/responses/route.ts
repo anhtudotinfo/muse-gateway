@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { musePool } from '@/lib/musePool';
 import { apiKeyService } from '@/lib/apiKeys';
+import { isRemoteHeaders } from '@/lib/remoteDetect';
 import { extractPromptFromResponseInput } from '@/lib/promptExtractor';
 import {
   buildBridgeInstructions,
@@ -26,7 +27,8 @@ export async function POST(req: NextRequest) {
   if (gate) return gate;
   try {
     const apiKey = apiKeyService.resolveKey(
-      req.headers.get('authorization') || req.headers.get('x-api-key')
+      req.headers.get('authorization') || req.headers.get('x-api-key'),
+      isRemoteHeaders(req.headers)
     );
     if (apiKey === null) {
       return NextResponse.json(

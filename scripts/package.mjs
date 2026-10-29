@@ -94,6 +94,8 @@ process.env.NODE_ENV = 'production';
 process.env.MUSE_PACKED = '1';
 process.env.MUSE_APP_DIR = dir;
 process.env.MUSE_DATA_DIR = dir;
+// Loopback-only bind — tunnels connect locally; MUSE_BIND=0.0.0.0 opens LAN.
+process.env.HOSTNAME = process.env.MUSE_BIND || '127.0.0.1';
 fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
 // Inside a SEA binary, require() only resolves builtins — createRequire
 // returns a regular CommonJS loader anchored at a real filesystem path.

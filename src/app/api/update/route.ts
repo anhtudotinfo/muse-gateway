@@ -85,6 +85,11 @@ export async function POST() {
   if (!latest || cmpVer(latest, current) <= 0) {
     return NextResponse.json({ ok: false, message: 'Đang chạy bản mới nhất.' });
   }
+  // The version string lands inside a cmd.exe command line — pin it to
+  // strict semver so a poisoned registry response can't inject arguments.
+  if (!/^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(latest)) {
+    return NextResponse.json({ error: 'Registry trả version không hợp lệ.' }, { status: 502 });
+  }
   try {
     const child = spawn('cmd.exe', ['/c', 'npm', 'i', '-g', `muse-gateway@${latest}`], {
       detached: true,

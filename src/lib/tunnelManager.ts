@@ -138,7 +138,10 @@ class TunnelManager {
   private killStrayCloudflared(match?: string): void {
     if (!IS_WIN) return;
     try {
-      const pattern = match ?? `localhost:${this.port()}`;
+      // The pattern is interpolated into a single-quoted PowerShell string —
+      // a token containing ' would break out and inject commands. Escape by
+      // doubling, and pin pid to a plain number.
+      const pattern = (match ?? `localhost:${this.port()}`).replace(/'/g, "''");
       const keepPid = this.cfProc?.pid ?? -1;
       spawnSync('powershell', [
         '-NoProfile', '-Command',

@@ -228,6 +228,11 @@ async function serve() {
   process.env.NODE_ENV = 'production';
   process.env.MUSE_APP_DIR = APP_DIR;
   process.env.MUSE_DATA_DIR = DATA_DIR;
+  // Bind loopback only — tunnels (cloudflared/Tailscale) connect locally so
+  // remote access still works, but LAN hosts can't reach the dashboard and
+  // spoof `Host: localhost` to bypass the remote guard. MUSE_BIND=0.0.0.0
+  // re-opens LAN access for users who need it.
+  process.env.HOSTNAME = process.env.MUSE_BIND || '127.0.0.1';
 
   const { createRequire } = require('module');
   const req = createRequire(path.join(APP_DIR, 'server.js'));
@@ -515,6 +520,7 @@ if (flag('--help') || flag('-h')) {
   muse-gateway stop       dừng instance đang chạy nền
   muse-gateway --open     mở dashboard
   MUSE_PORT=xxxx muse-gateway  đổi port (mặc định 1412)
+  MUSE_BIND=0.0.0.0 muse-gateway  mở truy cập từ LAN (mặc định chỉ localhost)
 
 Data:  ${DATA_DIR}
 Log:   ${LOG_FILE}`);

@@ -10,5 +10,9 @@ export async function GET() {
 
 export async function PATCH(req: Request) {
   const body = await req.json().catch(() => ({}));
-  return NextResponse.json(settingsService.patch(body));
+  const updated = settingsService.patch(body);
+  // Enabling remote dashboard access must always have an unlock token —
+  // mint it here so the UI can show the access link immediately.
+  if (updated.tunnelDashboardAccess) settingsService.ensureDashboardToken();
+  return NextResponse.json(settingsService.get());
 }
