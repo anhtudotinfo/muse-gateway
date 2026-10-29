@@ -5,6 +5,7 @@ import { isRemoteHeaders } from '@/lib/remoteDetect';
 import { extractPromptFromChatMessages } from '@/lib/promptExtractor';
 import { extractWorkspaceCwd } from '@/lib/toolBridge';
 import { licenseGate } from '@/lib/licenseGate';
+import { publicOrigin } from '@/lib/requestOrigin';
 import type { ChatCompletionRequest } from '@/types';
 
 const corsHeaders = {
@@ -149,7 +150,7 @@ export async function POST(req: NextRequest) {
                       content:
                         (media.length
                           ? '\n\nAttachments:\n' +
-                            media.map((u) => `- ${u.startsWith('http') ? u : new URL(req.url).origin + u}`).join('\n')
+                            media.map((u) => `- ${u.startsWith('http') ? u : publicOrigin(req) + u}`).join('\n')
                           : '') +
                         (threadUrl ? `\n\nThread: ${threadUrl}` : ''),
                     },
@@ -212,7 +213,7 @@ export async function POST(req: NextRequest) {
       thread,
       pinAccount,
     });
-    const origin = new URL(req.url).origin;
+    const origin = publicOrigin(req);
     const content =
       (media.length
         ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`

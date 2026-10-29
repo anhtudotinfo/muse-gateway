@@ -11,6 +11,7 @@ import {
   buildProjectContext,
 } from '@/lib/toolBridge';
 import { licenseGate } from '@/lib/licenseGate';
+import { publicOrigin } from '@/lib/requestOrigin';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -208,7 +209,7 @@ export async function POST(req: NextRequest) {
             // Generated media links arrive with the completed reply — append
             // them (and stream a final delta) so clients can resolve files.
             if (replyMedia.length) {
-              const origin = new URL(req.url).origin;
+              const origin = publicOrigin(req);
               const block =
                 '\n\nAttachments:\n' +
                 replyMedia.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n');
@@ -343,7 +344,7 @@ export async function POST(req: NextRequest) {
       keyName,
       endpoint: '/v1/responses',
     });
-    const origin = new URL(req.url).origin;
+    const origin = publicOrigin(req);
     const content = media.length
       ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
       : text;
