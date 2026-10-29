@@ -42,6 +42,9 @@ jobs:
       - name: Build + package (produces dist/npm/muse-gateway + tgz)
         run: npm run package
 
+      - name: Upgrade npm (OIDC trusted publishing needs >= 11.5.1)
+        run: npm install -g npm@latest
+
       - name: Publish to npm
         working-directory: dist/npm/muse-gateway
         run: npm publish --access public
