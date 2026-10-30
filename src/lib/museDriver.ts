@@ -66,6 +66,15 @@ export interface ChatResult {
 // Max command-execution rounds per user prompt before giving the reply back.
 const MAX_CMD_ROUNDS = 5;
 
+/** Parallel pages (tabs) per saved account. Each lane drives its own Muse
+ *  thread — Muse renders server-side per conversation, so one account can
+ *  have several generations in flight at once. Chrome tab ≈ 150–300MB, so
+ *  the cap is modest; extra requests park in the lane queue. */
+const LANES_PER_ACCOUNT = Math.max(
+  1,
+  Math.min(6, Number(process.env.MUSE_LANES_PER_ACCOUNT) || 3)
+);
+
 /** Does this reply read like a blocking clarifying question rather than a
  *  finished answer? Matched on Vietnamese + English ask-for-confirmation
  *  phrasing; callers must also check the reply carries no media (a done
@@ -82,11 +91,18 @@ function looksLikeClarification(text: string): boolean {
 
 interface AccountSlot {
   context: BrowserContext;
-  page: Page;
   cookiesRaw: string;
   /** Normalized proxy URL this slot's browser was launched with — a proxy
    *  change on the profile must force a fresh context in the right browser. */
   proxy: string;
+  /** Parallel lanes — one page per in-flight request. All pages share the
+   *  incognito context's cookies, and Muse renders per thread server-side,
+   *  so lane N drives its own /thread/<id> while lane M collects a reply
+   *  from a different conversation. */
+  pages: Page[];
+  /** Lanes currently mid-creation — counted against the cap so two parked
+   *  requests don't each spawn a page past LANES_PER_ACCOUNT. */
+  creating: number;
 }
 
 class MuseDriverService {
@@ -95,7 +111,9 @@ class MuseDriverService {
   // Key '' = direct connection.
   private browsers: Map<string, Browser> = new Map();
   private slots: Map<string, AccountSlot> = new Map();
-  private busy: Set<string> = new Set();
+  // Busy is per PAGE (lane), not per account — one account serves up to
+  // LANES_PER_ACCOUNT in-flight requests concurrently.
+  private busyPages: Set<Page> = new Set();
   private waiting: Set<string> = new Set();
   private lastActiveTime: number = Date.now();
   private idleTimer: NodeJS.Timeout | null = null;
@@ -106,7 +124,7 @@ class MuseDriverService {
     // Never fire while a request is in flight — a long (10-min) generation
     // must not have its browser killed mid-wait; re-arm instead.
     this.idleTimer = setTimeout(() => {
-      if (this.busy.size > 0) { this.resetIdleTimer(); return; }
+      if (this.busyPages.size > 0) { this.resetIdleTimer(); return; }
       this.close();
     }, 15 * 60 * 1000);
   }
@@ -153,7 +171,9 @@ class MuseDriverService {
 
   // One incognito context per account — cookies are isolated, so every saved
   // profile becomes an independent Muse session inside its proxy's browser.
-  async getPageForSession(session: Profile): Promise<Page> {
+  // The context hosts up to LANES_PER_ACCOUNT pages (lanes); all lanes share
+  // the context's cookie jar but drive their own Muse thread.
+  private async getSlotForSession(session: Profile): Promise<AccountSlot> {
     this.resetIdleTimer();
     const proxy = this.proxyKey(session);
     const existing = this.slots.get(session.id);
@@ -161,9 +181,9 @@ class MuseDriverService {
       existing &&
       existing.cookiesRaw === session.cookies &&
       existing.proxy === proxy &&
-      !existing.page.isClosed()
+      existing.context.browser().connected
     ) {
-      return existing.page;
+      return existing;
     }
 
     if (existing) {
@@ -173,7 +193,23 @@ class MuseDriverService {
 
     const browser = await this.ensureBrowser(proxy);
     const context = await browser.createBrowserContext();
-    const page = await context.newPage();
+    const slot: AccountSlot = {
+      context,
+      cookiesRaw: session.cookies,
+      proxy,
+      pages: [],
+      creating: 0,
+    };
+    this.slots.set(session.id, slot);
+    await this.addLane(slot, session);
+    return slot;
+  }
+
+  /** Open one more lane (page) inside the slot's context — cookies are
+   *  context-level so the new page is already logged in; it just needs the
+   *  app load + realtime-socket warmup before it can post prompts. */
+  private async addLane(slot: AccountSlot, session: Profile): Promise<Page> {
+    const page = await slot.context.newPage();
     await page.setViewport({ width: 1280, height: 800 });
 
     // Authenticated proxy — credentials live in the URL, Chrome prompts per
@@ -188,9 +224,6 @@ class MuseDriverService {
       }
     } catch {}
 
-    const cookiesToSet = parseCookieString(session.cookies);
-    await page.setCookie(...formatCookiesForPuppeteer(cookiesToSet));
-
     const map = parseCookieString(session.cookies);
     await page.setCookie(...formatCookiesForPuppeteer(map));
 
@@ -203,8 +236,40 @@ class MuseDriverService {
     // "Delivery not confirmed" and no reply is ever generated.
     await new Promise((r) => setTimeout(r, 3500));
 
-    this.slots.set(session.id, { context, page, cookiesRaw: session.cookies, proxy });
+    slot.pages.push(page);
     return page;
+  }
+
+  /** Acquire a lane for this session — reuse an idle page, else spawn one
+   *  up to LANES_PER_ACCOUNT, else wait until a lane frees. */
+  private async acquireLane(session: Profile, signal: AbortSignal | null): Promise<Page> {
+    let announced = false;
+    for (;;) {
+      if (signal?.aborted) throw new Error('Request aborted by client.');
+      const slot = await this.getSlotForSession(session);
+      // Prune lanes Chrome already closed (crash, context teardown) so they
+      // don't count against LANES_PER_ACCOUNT.
+      slot.pages = slot.pages.filter((p) => !p.isClosed());
+      const free = slot.pages.find((p) => !this.busyPages.has(p));
+      if (free) return free;
+      if (slot.pages.length + slot.creating < LANES_PER_ACCOUNT) {
+        slot.creating++;
+        try {
+          return await this.addLane(slot, session);
+        } catch (err) {
+          // Lane spawn failed — fall back to waiting for a busy lane if any
+          // exists, otherwise the error should surface to the caller.
+          if (!slot.pages.length) throw err;
+        } finally {
+          slot.creating--;
+        }
+      }
+      if (!announced) {
+        console.log(`[MuseDriver] queued — "${session.name}" hết lane rảnh, request xếp hàng chờ`);
+        announced = true;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
   }
 
   private resolveSession(sessionId?: string | null): Profile {
@@ -220,28 +285,19 @@ class MuseDriverService {
   async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null }: ChatOptions): Promise<ChatResult> {
     const session = this.resolveSession(sessionId);
 
-    // Serialize per account — different accounts run in parallel. Requests
-    // parked here are reported as "queued" in pool state.
+    // Lanes are per account — requests beyond LANES_PER_ACCOUNT park here
+    // and are reported as "queued" in pool state. Different accounts run
+    // fully in parallel; same-account lanes share cookies but drive their
+    // own Muse threads.
     this.waiting.add(session.id);
-    try {
-      let announced = false;
-      while (this.busy.has(session.id)) {
-        if (signal?.aborted) throw new Error('Request aborted by client.');
-        if (!announced) {
-          console.log(`[MuseDriver] queued — "${session.name}" đang bận, request xếp hàng chờ`);
-          announced = true;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    } finally {
-      this.waiting.delete(session.id);
-    }
+    const page = await this.acquireLane(session, signal).finally(() =>
+      this.waiting.delete(session.id)
+    );
 
-    this.busy.add(session.id);
+    this.busyPages.add(page);
     this.lastActiveTime = Date.now();
 
     try {
-      const page = await this.getPageForSession(session);
       // Thread continuation wins over newChat — a task that must land in an
       // existing conversation is navigated there explicitly; newChat only
       // applies when there is no thread to return to.
@@ -317,20 +373,24 @@ class MuseDriverService {
       return makeResult();
     } catch (err) {
       console.error('[MuseDriver] Chat error:', err);
-      await this.dropSlot(session.id);
+      await this.dropLane(session.id, page);
       throw err;
     } finally {
-      this.busy.delete(session.id);
+      this.busyPages.delete(page);
       this.resetIdleTimer();
     }
   }
 
+  private slotPages(sessionId: string): Page[] {
+    return this.slots.get(sessionId)?.pages ?? [];
+  }
+
   isBusy(sessionId: string): boolean {
-    return this.busy.has(sessionId);
+    return this.slotPages(sessionId).some((p) => this.busyPages.has(p));
   }
 
   isQueued(sessionId: string): boolean {
-    return this.waiting.has(sessionId) && !this.busy.has(sessionId);
+    return this.waiting.has(sessionId);
   }
 
   /** Warm up a session's page (loads Muse if needed, touches the realtime
@@ -339,9 +399,11 @@ class MuseDriverService {
   async keepAlive(sessionId: string): Promise<'ok' | 'busy' | 'error'> {
     try {
       // Skip accounts busy or about to be (a request is parked on them).
-      if (this.busy.has(sessionId) || this.waiting.has(sessionId)) return 'busy';
+      if (this.isBusy(sessionId) || this.waiting.has(sessionId)) return 'busy';
       const session = this.resolveSession(sessionId);
-      const page = await this.getPageForSession(session);
+      const slot = await this.getSlotForSession(session);
+      const page = slot.pages.find((p) => !p.isClosed());
+      if (!page) return 'error';
       // Touch the page — realtime socket pings keep the session warm.
       await page.evaluate(() => document.title).catch(() => {});
       return 'ok';
@@ -681,9 +743,16 @@ class MuseDriverService {
     }
   }
 
-  private async dropSlot(sessionId: string): Promise<void> {
+  /** Close a single broken lane. Only the failing page dies — sibling lanes
+   *  keep their in-flight replies; the context stays as long as it hosts
+   *  other pages. The slot is recreated lazily on the next request. */
+  private async dropLane(sessionId: string, page: Page): Promise<void> {
     const slot = this.slots.get(sessionId);
-    if (slot) {
+    if (!slot) return;
+    const idx = slot.pages.indexOf(page);
+    if (idx >= 0) slot.pages.splice(idx, 1);
+    try { await page.close(); } catch {}
+    if (!slot.pages.length) {
       try { await slot.context.close(); } catch {}
       this.slots.delete(sessionId);
     }
@@ -1447,7 +1516,9 @@ class MuseDriverService {
       .replace(/\.[a-z0-9]+$/i, '')
       .replace(/[^\w.-]+/g, '_')
       .slice(0, 60);
-    const fname = `${base}-${Date.now().toString(36)}${ext}`;
+    const fname = `${base}-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 6)}${ext}`;
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
     const url = persistMediaFile(fname, Buffer.from(data.b64, 'base64'));
     console.log('[MuseDriver] saved media:', fname, `(${(data.b64.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
