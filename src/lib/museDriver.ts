@@ -103,6 +103,9 @@ interface AccountSlot {
   /** Lanes currently mid-creation — counted against the cap so two parked
    *  requests don't each spawn a page past LANES_PER_ACCOUNT. */
   creating: number;
+  /** Last addLane failure — while fresh, requests park on existing lanes
+   *  instead of hammering page loads every poll. */
+  lastLaneError?: number;
 }
 
 class MuseDriverService {
@@ -252,14 +255,25 @@ class MuseDriverService {
       slot.pages = slot.pages.filter((p) => !p.isClosed());
       const free = slot.pages.find((p) => !this.busyPages.has(p));
       if (free) return free;
-      if (slot.pages.length + slot.creating < LANES_PER_ACCOUNT) {
+      if (
+        slot.pages.length + slot.creating < LANES_PER_ACCOUNT &&
+        (!slot.lastLaneError || Date.now() - slot.lastLaneError > 30000)
+      ) {
         slot.creating++;
         try {
           return await this.addLane(slot, session);
         } catch (err) {
-          // Lane spawn failed — fall back to waiting for a busy lane if any
-          // exists, otherwise the error should surface to the caller.
-          if (!slot.pages.length) throw err;
+          slot.lastLaneError = Date.now();
+          if (!slot.pages.length) {
+            // No surviving lanes — the context itself is probably dead.
+            // Drop the slot so the next request rebuilds it from scratch
+            // instead of failing forever on a cached corpse.
+            try { await slot.context.close(); } catch {}
+            this.slots.delete(session.id);
+            throw err;
+          }
+          // Busy lanes still exist — park on them instead of retrying the
+          // spawn every poll cycle.
         } finally {
           slot.creating--;
         }
