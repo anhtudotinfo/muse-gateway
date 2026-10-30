@@ -7,7 +7,7 @@ import { museDriver } from './museDriver';
 import { settingsService } from './settings';
 import './logBuffer';
 import type { Profile } from '@/types';
-import type { ChatOptions, ChatResult } from './museDriver';
+import type { ChatOptions, ChatResult, LaneStatus } from './museDriver';
 
 // Pool of Muse accounts (one per saved cookie profile) with 9router-style
 // selection: strategy (fallback order / round-robin), per-account cooldown
@@ -44,6 +44,8 @@ export interface PoolAccountView extends PoolAccountStats {
   worker: string;
   status: AccountStatus;
   cooldownRemainingMs: number;
+  /** Live lane snapshot — pages/threads under this account's context. */
+  lanes: LaneStatus;
 }
 
 export interface PoolStateView {
@@ -228,6 +230,7 @@ class MusePoolService {
           ...st,
           status,
           cooldownRemainingMs: Math.max(0, st.cooldownUntil - now),
+          lanes: museDriver.laneStatus(s.id),
         };
       }),
     };

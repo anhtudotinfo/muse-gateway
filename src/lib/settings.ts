@@ -20,6 +20,10 @@ export interface AppSettings {
   keepAliveEnabled: boolean;
   keepAliveMin: number;
   maskEmails: boolean;
+  /** Parallel pages (tabs) each saved account may run — every lane drives
+   *  its own Muse thread, so N lanes = N concurrent generations on one
+   *  account. 1–6; each tab costs ~150–300MB RAM. */
+  lanesPerAccount: number;
   /** Periodically re-test accounts sitting in cooldown and pull them back
    *  into the pool early when their session turns out to be alive. */
   autoHealEnabled: boolean;
@@ -34,6 +38,7 @@ const DEFAULTS: AppSettings = {
   keepAliveEnabled: false,
   keepAliveMin: 30,
   maskEmails: false,
+  lanesPerAccount: 3,
   autoHealEnabled: true,
 };
 
@@ -79,6 +84,9 @@ class SettingsService {
     }
     if (typeof patch.keepAliveMin === 'number' && patch.keepAliveMin >= 1 && patch.keepAliveMin <= 1440) {
       this.settings.keepAliveMin = Math.round(patch.keepAliveMin);
+    }
+    if (typeof patch.lanesPerAccount === 'number' && patch.lanesPerAccount >= 1 && patch.lanesPerAccount <= 6) {
+      this.settings.lanesPerAccount = Math.round(patch.lanesPerAccount);
     }
     this.save();
     return this.get();

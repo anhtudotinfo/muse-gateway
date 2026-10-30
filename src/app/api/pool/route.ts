@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { musePool } from '@/lib/musePool';
+import { museDriver } from '@/lib/museDriver';
 
 export async function GET() {
   return NextResponse.json(musePool.getState());
@@ -31,6 +32,12 @@ export async function PATCH(req: NextRequest) {
       }
       if (body.resetCooldown) {
         musePool.resetAccount(body.accountId);
+      }
+      if (typeof body.closeLane === 'number') {
+        // Lane-level control — kill an idle page (tab) under this account;
+        // busy lanes are refused by the driver so replies aren't lost.
+        const err = await museDriver.closeLane(body.accountId, body.closeLane);
+        if (err) return NextResponse.json({ error: err }, { status: 400 });
       }
     }
     return NextResponse.json(musePool.getState());

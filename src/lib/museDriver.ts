@@ -2,6 +2,7 @@ import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
 import { getBrowserExecutable, getSavedSessions, parseCookieString, formatCookiesForPuppeteer } from './museService';
+import { settingsService } from './settings';
 import { parseCommandRequests, isCommandAllowed, runLocalCommand } from './toolBridge';
 import './logBuffer';
 import { MEDIA_DIR, persistMediaFile } from './mediaStore';
@@ -69,11 +70,40 @@ const MAX_CMD_ROUNDS = 5;
 /** Parallel pages (tabs) per saved account. Each lane drives its own Muse
  *  thread — Muse renders server-side per conversation, so one account can
  *  have several generations in flight at once. Chrome tab ≈ 150–300MB, so
- *  the cap is modest; extra requests park in the lane queue. */
-const LANES_PER_ACCOUNT = Math.max(
-  1,
-  Math.min(6, Number(process.env.MUSE_LANES_PER_ACCOUNT) || 3)
-);
+ *  the cap is modest; extra requests park in the lane queue. Live value —
+ *  the dashboard setting is re-read on every acquisition so changing it
+ *  applies instantly; MUSE_LANES_PER_ACCOUNT env overrides for power users. */
+const laneCap = () =>
+  Math.max(
+    1,
+    Math.min(
+      6,
+      Number(process.env.MUSE_LANES_PER_ACCOUNT) ||
+        settingsService.get().lanesPerAccount ||
+        3
+    )
+  );
+
+/** One lane = one page under an account's context. */
+export interface LaneView {
+  /** 1-based lane number — stable handle for laneStatus/closeLane. */
+  index: number;
+  busy: boolean;
+  /** Muse thread the lane is parked on — read from the live page URL;
+   *  null when idle on home or the /thread/new composer. */
+  threadId: string | null;
+  threadUrl: string | null;
+}
+
+export interface LaneStatus {
+  cap: number;
+  lanes: LaneView[];
+  busy: number;
+  /** Lanes mid-creation (page load + socket warmup in progress). */
+  creating: number;
+  /** At least one request parked waiting for a free lane. */
+  queued: boolean;
+}
 
 /** Does this reply read like a blocking clarifying question rather than a
  *  finished answer? Matched on Vietnamese + English ask-for-confirmation
@@ -115,7 +145,7 @@ class MuseDriverService {
   private browsers: Map<string, Browser> = new Map();
   private slots: Map<string, AccountSlot> = new Map();
   // Busy is per PAGE (lane), not per account — one account serves up to
-  // LANES_PER_ACCOUNT in-flight requests concurrently.
+  // laneCap() in-flight requests concurrently.
   private busyPages: Set<Page> = new Set();
   private waiting: Set<string> = new Set();
   private lastActiveTime: number = Date.now();
@@ -251,12 +281,12 @@ class MuseDriverService {
       if (signal?.aborted) throw new Error('Request aborted by client.');
       const slot = await this.getSlotForSession(session);
       // Prune lanes Chrome already closed (crash, context teardown) so they
-      // don't count against LANES_PER_ACCOUNT.
+      // don't count against laneCap().
       slot.pages = slot.pages.filter((p) => !p.isClosed());
       const free = slot.pages.find((p) => !this.busyPages.has(p));
       if (free) return free;
       if (
-        slot.pages.length + slot.creating < LANES_PER_ACCOUNT &&
+        slot.pages.length + slot.creating < laneCap() &&
         (!slot.lastLaneError || Date.now() - slot.lastLaneError > 30000)
       ) {
         slot.creating++;
@@ -397,6 +427,46 @@ class MuseDriverService {
 
   private slotPages(sessionId: string): Page[] {
     return this.slots.get(sessionId)?.pages ?? [];
+  }
+
+  /** Live lane snapshot for the dashboard — which pages the account holds,
+   *  which are in flight, and which Muse thread each is parked on (read
+   *  off the page URL). */
+  laneStatus(sessionId: string): LaneStatus {
+    const slot = this.slots.get(sessionId);
+    const lanes: LaneView[] = [];
+    for (const [i, p] of (slot?.pages ?? []).entries()) {
+      if (p.isClosed()) continue;
+      const url = p.url() || '';
+      const m = url.match(/\/thread\/([^/?#]+)/);
+      lanes.push({
+        index: i + 1,
+        busy: this.busyPages.has(p),
+        threadId: m && m[1] !== 'new' ? m[1] : null,
+        threadUrl: m && m[1] !== 'new' ? url : null,
+      });
+    }
+    return {
+      cap: laneCap(),
+      lanes,
+      busy: lanes.filter((l) => l.busy).length,
+      creating: slot?.creating ?? 0,
+      queued: this.waiting.has(sessionId),
+    };
+  }
+
+  /** Close lane #index (1-based, matching laneStatus). Busy lanes are
+   *  refused — killing a page mid-collection would lose the reply, so it
+   *  must finish or time out first. Returns an error string on refusal. */
+  async closeLane(sessionId: string, index: number): Promise<string | null> {
+    const slot = this.slots.get(sessionId);
+    const p = slot?.pages?.[index - 1];
+    if (!p || p.isClosed()) return `Lane ${index} không tồn tại.`;
+    if (this.busyPages.has(p)) {
+      return `Lane ${index} đang chạy — không đóng giữa chừng.`;
+    }
+    await this.dropLane(sessionId, p);
+    return null;
   }
 
   isBusy(sessionId: string): boolean {
