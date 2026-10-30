@@ -91,7 +91,14 @@ export async function POST() {
     return NextResponse.json({ error: 'Registry trả version không hợp lệ.' }, { status: 502 });
   }
   try {
-    const child = spawn('cmd.exe', ['/c', 'npm', 'i', '-g', `muse-gateway@${latest}`], {
+    // Chain the whole update in one detached cmd: install → stop the old
+    // instance (pid-file kill) → breathe so the port frees → relaunch the
+    // server on the NEW build. A plain `npm i -g` leaves the old process
+    // holding :1412, which is exactly the "updated but still old" trap.
+    const cmd =
+      `npm i -g muse-gateway@${latest} && timeout /t 3 /nobreak >nul && ` +
+      `muse-gateway stop && timeout /t 3 /nobreak >nul && muse-gateway --serve`;
+    const child = spawn('cmd.exe', ['/c', cmd], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
@@ -101,7 +108,7 @@ export async function POST() {
     return NextResponse.json({
       ok: true,
       latest,
-      message: `Đang cài v${latest} — khởi động lại muse-gateway sau ~30 giây để dùng bản mới.`,
+      message: `Đang cài v${latest} — gateway tự restart sau ~40 giây, dashboard sẽ hồi lại trên bản mới.`,
     });
   } catch (err) {
     return NextResponse.json({ error: `Không chạy được npm: ${(err as Error)?.message || err}` }, { status: 500 });

@@ -108,15 +108,24 @@ function postJson(url, body, timeoutMs = 5000) {
   });
 }
 
-/** Server status: null when not reachable, else the /api/license view. */
+/** Server status: null when not reachable, else the /api/license view.
+ *  runningVersion = the build the RUNNING process reports — an npm update
+ *  swaps files on disk but leaves the old process holding the port, so a
+ *  mismatch here means "restart to load the new code". */
 async function getStatus() {
   const lic = await getJson(`${BASE}/api/license`, 900);
   if (!lic) return null;
+  let runningVersion = '';
+  try {
+    const upd = await getJson(`${BASE}/api/update`, 1500);
+    if (upd?.current) runningVersion = String(upd.current);
+  } catch {}
   return {
     licensed: !!lic.licensed,
     type: lic.type || 'community',
     expiresAt: lic.expiresAt || '',
     email: lic.email || '',
+    runningVersion,
   };
 }
 
@@ -373,6 +382,11 @@ async function interactiveMenu() {
       : C.dim('○ stopped');
     lines.push(C.bold(`  Muse Gateway  v${PKG_VERSION}`));
     lines.push(`  Server:  ${C.cyan(BASE)}   ${statusText}`);
+    if (status?.runningVersion && status.runningVersion !== PKG_VERSION) {
+      lines.push(
+        C.yellow(`  ⚠ Server still running v${status.runningVersion} — "Stop Server" then reopen to load v${PKG_VERSION}.`)
+      );
+    }
     if (status && !status.licensed) lines.push(`  ${C.yellow('Get a license:')} ${C.cyan('https://www.storetiki.online')}`);
     lines.push(C.cyan(bar));
     items.forEach((it, i) => {
@@ -499,8 +513,26 @@ async function interactiveMenu() {
             console.log('Update failed — run manually: npm i -g muse-gateway');
             process.exit(0);
           });
-          upd.on('exit', () => {
-            console.log('\nUpdate complete — run `muse-gateway` again.');
+          upd.on('exit', async (code) => {
+            if (code) {
+              console.log('\nUpdate failed — run manually: npm i -g muse-gateway');
+              process.exit(0);
+            }
+            // The old server process still holds the port — files changed on
+            // disk but RAM keeps the old build. Kill it and respawn so the
+            // new code is actually the one answering :1412.
+            console.log('\nRestarting server with the new version…');
+            if (await getStatus()) stopInstance();
+            spawnBackground();
+            const ok = await waitReady(45000);
+            const st = ok ? await getStatus() : null;
+            console.log(
+              st?.runningVersion && cmpVersion(st.runningVersion, latest) >= 0
+                ? C.green(`✓ v${st.runningVersion} now serving at ${BASE}`)
+                : ok
+                  ? `Restarted — dashboard at ${BASE}`
+                  : C.yellow('Installed — start manually: muse-gateway')
+            );
             process.exit(0);
           });
           return; // npm takes over the terminal
