@@ -172,6 +172,9 @@ class TunnelManager {
     return new Promise((resolve, reject) => {
       const proc = spawn(CF_BIN, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
+        // The gateway runs detached/hidden — without windowsHide Windows
+        // allocates a VISIBLE console window for cloudflared.exe every spawn.
+        windowsHide: true,
       });
       this.cfProc = proc;
 
