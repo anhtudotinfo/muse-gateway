@@ -169,21 +169,54 @@ function readPid() {
   }
 }
 
-function stopInstance() {
-  const pid = readPid();
-  if (!pid) {
-    console.log('No running instance found (no pid file).');
-    return false;
-  }
+/** PID of whatever process is LISTENing on our port — needed because
+ *  getStatus() detects the server by HTTP, while the pid file only covers
+ *  instances we spawned. An orphan (crashed launcher, older install,
+ *  manual `node server`) holds the port but isn't in the pid file, so a
+ *  pid-file-only stop reports "nothing to stop" while :1412 stays bound. */
+function pidsByPort() {
+  const pids = new Set();
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`netstat -ano -p tcp`, { stdio: 'pipe', encoding: 'utf8' });
+      for (const line of out.split('\n')) {
+        const m = line.match(/^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/);
+        if (m && m[1] === String(PORT)) pids.add(Number(m[2]));
+      }
+    } else {
+      const out = execSync(`lsof -ti tcp:${PORT} -sTCP:LISTEN`, { stdio: 'pipe', encoding: 'utf8' });
+      for (const l of out.split('\n')) {
+        const p = Number(l.trim());
+        if (p > 0) pids.add(p);
+      }
+    }
+  } catch { /* netstat/lsof unavailable — fall through to pid file only */ }
+  return [...pids];
+}
+
+function killPid(pid) {
   try {
     process.kill(pid);
+    return true;
   } catch {
     if (process.platform === 'win32') {
       try {
         execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe' });
+        return true;
       } catch {}
     }
+    return false;
   }
+}
+
+function stopInstance() {
+  const pid = readPid();
+  const portPids = pidsByPort().filter((p) => p !== pid && p !== process.pid);
+  if (!pid && portPids.length === 0) {
+    console.log('No running instance found.');
+    return false;
+  }
+  for (const p of [pid, ...portPids]) if (p > 0) killPid(p);
   fs.rmSync(PID_FILE, { force: true });
   console.log('Muse Gateway stopped.');
   return true;
