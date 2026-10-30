@@ -13,7 +13,8 @@
 // and repackage the app.
 //
 // Endpoints: POST /activate · POST /verify · POST /revoke · POST /unrevoke ·
-// POST /unbind · GET /admin/list · POST /admin/mint — same protocol as
+// POST /unbind · GET /admin/list · POST /admin/mint · POST /admin/extend ·
+// POST /admin/delete · GET /admin/history — same protocol as
 // server.mjs plus admin key issuance for the store dashboard.
 
 const enc = new TextEncoder();
@@ -103,19 +104,44 @@ async function saveRec(env, keyId, rec) {
   await env.LICENSE_KV.put('key:' + keyId, JSON.stringify(rec));
 }
 
+// Per-key event log at 'log:<keyId>' — capped at 50 entries, newest last.
+// Only state-changing events are logged (mint/activate/bind/admin actions);
+// routine /verify calls would burn through the free-tier KV write quota.
+const LOG_CAP = 50;
+async function logEvent(env, keyId, action, detail) {
+  try {
+    const name = 'log:' + keyId;
+    const events = (await env.LICENSE_KV.get(name, 'json')) || [];
+    events.push({ t: Date.now(), a: action, ...(detail ? { d: detail } : {}) });
+    await env.LICENSE_KV.put(name, JSON.stringify(events.slice(-LOG_CAP)));
+  } catch { /* logging must never break the request path */ }
+}
+
 async function check(env, body, bind) {
   const { key, hwid, nonce } = body || {};
   const parsed = await parseKey(env, key);
   if (!parsed || !parsed.sigOk) return deny(env, 'invalid_signature', nonce);
   const now = Date.now();
-  if (parsed.expMs > 0 && now > parsed.expMs) return deny(env, 'license_expired', nonce, parsed.keyId);
+  // Hard-deleted keys leave a 'del:' tombstone — a still-valid signature
+  // would otherwise silently re-activate on the next /activate.
+  if (await env.LICENSE_KV.get('del:' + parsed.keyId, 'json')) {
+    return deny(env, 'license_deleted', nonce, parsed.keyId);
+  }
 
   let rec = await loadRec(env, parsed.keyId, null);
+  // rec.expMs is the effective expiry: /admin/extend rewrites it, while the
+  // expiry baked into the signed payload is immutable. An "expired" key can
+  // be revived by extending the record — so check the record first.
+  const effExpMs = rec ? Number(rec.expMs) || 0 : parsed.expMs;
+  if (effExpMs > 0 && now > effExpMs) return deny(env, 'license_expired', nonce, parsed.keyId);
+
   let dirty = false;
+  let firstActivation = false;
   if (!rec) {
     if (!bind) return deny(env, 'key_not_activated', nonce, parsed.keyId);
     rec = { email: parsed.email, expMs: parsed.expMs, hwids: [], revoked: false, createdAt: now, lastSeen: 0, product: parsed.product };
     dirty = true;
+    firstActivation = true;
   }
   if (rec.revoked) {
     if (dirty) await saveRec(env, parsed.keyId, rec);
@@ -127,6 +153,7 @@ async function check(env, body, bind) {
     dirty = true;
   }
 
+  let boundNewHwid = false;
   if (parsed.keyHwid) {
     if (String(hwid) !== parsed.keyHwid) {
       if (dirty) await saveRec(env, parsed.keyId, rec);
@@ -136,15 +163,21 @@ async function check(env, body, bind) {
     if (bind && rec.hwids.length < MAX_HWIDS(env)) {
       rec.hwids.push(String(hwid));
       dirty = true;
+      boundNewHwid = !firstActivation;
     } else {
       if (dirty) await saveRec(env, parsed.keyId, rec);
       return deny(env, rec.hwids.length ? 'hwid_not_bound' : 'hwid_required', nonce, parsed.keyId);
     }
   }
   if (dirty) await saveRec(env, parsed.keyId, rec);
+  if (firstActivation) {
+    await logEvent(env, parsed.keyId, 'activate', hwid ? { hwid: String(hwid) } : undefined);
+  } else if (boundNewHwid) {
+    await logEvent(env, parsed.keyId, 'bind', { hwid: String(hwid) });
+  }
 
   const bound = parsed.keyHwid || String(hwid || '');
-  const exp = Math.min(now + TTL_MS(env), parsed.expMs > 0 ? parsed.expMs : now + TTL_MS(env));
+  const exp = Math.min(now + TTL_MS(env), effExpMs > 0 ? effExpMs : now + TTL_MS(env));
   const signed = await signVerdict(env, { ok: true, kid: parsed.keyId, h: bound, exp, reason: 'ok', nonce: String(nonce || ''), p: parsed.product });
   return {
     ...signed,
@@ -152,7 +185,7 @@ async function check(env, body, bind) {
     keyId: parsed.keyId,
     email: parsed.email,
     boundHwid: bound,
-    expiresAt: parsed.expMs ? new Date(parsed.expMs).toISOString() : '',
+    expiresAt: effExpMs ? new Date(effExpMs).toISOString() : '',
   };
 }
 
@@ -198,8 +231,10 @@ async function provisionTunnel(env, body) {
   }
   const parsed = await parseKey(env, body?.key);
   if (!parsed || !parsed.sigOk) return json(403, { error: 'invalid_signature' });
-  if (parsed.expMs > 0 && Date.now() > parsed.expMs) return json(403, { error: 'license_expired' });
+  if (await env.LICENSE_KV.get('del:' + parsed.keyId, 'json')) return json(403, { error: 'license_deleted' });
   const rec = await env.LICENSE_KV.get('key:' + parsed.keyId, 'json');
+  const effExpMs = rec ? Number(rec.expMs) || 0 : parsed.expMs;
+  if (effExpMs > 0 && Date.now() > effExpMs) return json(403, { error: 'license_expired' });
   if (rec?.revoked) return json(403, { error: 'license_revoked' });
 
   const domain = String(env.TUNNEL_DOMAIN).replace(/^\.+|\.+$/g, '').toLowerCase();
@@ -264,6 +299,33 @@ async function provisionTunnel(env, body) {
   });
 }
 
+// Hard-delete a key: wipe the record, event log and tunnel cache, clean up
+// the Cloudflare tunnel + DNS (best effort), then leave a 'del:' tombstone
+// so the still-valid signed key can never activate again.
+async function deleteKey(env, keyId, rec, parsed) {
+  const email = rec?.email || parsed?.email || '';
+  const product = rec?.product || parsed?.product || 'muse';
+  try {
+    const tun = await env.LICENSE_KV.get('tun:' + keyId, 'json');
+    if (tun?.tunnelId && env.CF_API_TOKEN && env.CF_ACCOUNT_ID) {
+      try {
+        await cf(env, 'DELETE', `/accounts/${env.CF_ACCOUNT_ID}/cfd_tunnel/${tun.tunnelId}`);
+      } catch { /* tunnel may already be gone */ }
+      if (tun.hostname && env.CF_ZONE_ID) {
+        try {
+          const recs = await cf(env, 'GET', `/zones/${env.CF_ZONE_ID}/dns_records?name=${encodeURIComponent(tun.hostname)}`);
+          const r = Array.isArray(recs) && recs[0];
+          if (r) await cf(env, 'DELETE', `/zones/${env.CF_ZONE_ID}/dns_records/${r.id}`);
+        } catch { /* DNS cleanup is best-effort */ }
+      }
+    }
+  } catch { /* KV read issues must not block deletion */ }
+  await env.LICENSE_KV.delete('key:' + keyId);
+  await env.LICENSE_KV.delete('tun:' + keyId);
+  await env.LICENSE_KV.delete('log:' + keyId);
+  await env.LICENSE_KV.put('del:' + keyId, JSON.stringify({ email, product, deletedAt: Date.now() }));
+}
+
 export default {
   async fetch(request, env) {
     try {
@@ -279,10 +341,16 @@ export default {
         return await provisionTunnel(env, body);
       }
 
-      const admin = ['/admin/list', '/admin/mint', '/revoke', '/unrevoke', '/unbind'];
+      const admin = ['/admin/list', '/admin/mint', '/admin/extend', '/admin/delete', '/admin/history', '/revoke', '/unrevoke', '/unbind'];
       if (admin.includes(u.pathname)) {
         if (!env.MUSE_ADMIN_TOKEN || request.headers.get('x-admin-token') !== String(env.MUSE_ADMIN_TOKEN).trim()) {
           return json(401, { error: 'admin token required' });
+        }
+        if (u.pathname === '/admin/history') {
+          const keyId = u.searchParams.get('keyId') || '';
+          if (!keyId) return json(400, { error: 'keyId required' });
+          const events = (await env.LICENSE_KV.get('log:' + keyId, 'json')) || [];
+          return json(200, { ok: true, events });
         }
         if (u.pathname === '/admin/list') {
           const out = { keys: {} };
@@ -316,11 +384,42 @@ export default {
           const expMs = forever ? 0 : Date.now() + days * 86_400_000;
           const key = await signLicense(env, { e: email, x: expMs, h: hwid, p: product }, prefixFor(product));
           const keyId = (await sha256hex(key.split('.')[2])).slice(0, 16);
+          await logEvent(env, keyId, 'mint', { email, product, days: forever ? 0 : days });
           return json(200, {
             ok: true, key, keyId, email, product,
             expiresAt: expMs ? new Date(expMs).toISOString() : null,
             hwid: hwid || null,
           });
+        }
+        if (u.pathname === '/admin/delete') {
+          const parsed = body.key ? await parseKey(env, body.key) : null;
+          const keyId = body.keyId || parsed?.keyId;
+          if (!keyId) return json(400, { error: 'keyId or key required' });
+          const rec = await env.LICENSE_KV.get('key:' + keyId, 'json');
+          await deleteKey(env, keyId, rec, parsed);
+          return json(200, { ok: true, keyId });
+        }
+        if (u.pathname === '/admin/extend') {
+          const parsed = body.key ? await parseKey(env, body.key) : null;
+          let keyId = body.keyId || parsed?.keyId;
+          let rec = keyId && (await env.LICENSE_KV.get('key:' + keyId, 'json'));
+          if (!rec && parsed?.sigOk) {
+            // Same tombstone trick as /revoke — extending a never-activated
+            // key creates its record so the new expiry has somewhere to live.
+            keyId = parsed.keyId;
+            rec = { email: parsed.email, expMs: parsed.expMs, hwids: [], revoked: false, createdAt: Date.now(), lastSeen: 0, product: parsed.product };
+          }
+          if (!rec) return json(404, { error: 'key not found' });
+          const forever = body.forever === true;
+          const days = Number(body.days);
+          if (!forever && (!Number.isFinite(days) || days <= 0 || days > 36500)) {
+            return json(400, { error: 'days must be 1..36500, or forever:true' });
+          }
+          const base = Math.max(Date.now(), Number(rec.expMs) || 0);
+          rec.expMs = forever ? 0 : base + days * 86_400_000;
+          await saveRec(env, keyId, rec);
+          await logEvent(env, keyId, 'extend', { days: forever ? 0 : days, expMs: rec.expMs });
+          return json(200, { ok: true, record: rec });
         }
         const parsed = body.key ? await parseKey(env, body.key) : null;
         let keyId = body.keyId || parsed?.keyId;
@@ -332,10 +431,15 @@ export default {
           rec = { email: parsed.email, expMs: parsed.expMs, hwids: [], revoked: false, createdAt: Date.now(), lastSeen: 0, product: parsed.product };
         }
         if (!rec) return json(404, { error: 'key not found' });
-        if (u.pathname === '/revoke') rec.revoked = true;
-        else if (u.pathname === '/unrevoke') rec.revoked = false;
-        else if (body.hwid) rec.hwids = (rec.hwids || []).filter((h) => h !== body.hwid);
-        else rec.hwids = [];
+        if (u.pathname === '/revoke') { rec.revoked = true; await logEvent(env, keyId, 'revoke'); }
+        else if (u.pathname === '/unrevoke') { rec.revoked = false; await logEvent(env, keyId, 'unrevoke'); }
+        else if (body.hwid) {
+          rec.hwids = (rec.hwids || []).filter((h) => h !== body.hwid);
+          await logEvent(env, keyId, 'unbind', { hwid: body.hwid });
+        } else {
+          rec.hwids = [];
+          await logEvent(env, keyId, 'unbind_all');
+        }
         await saveRec(env, keyId, rec);
         return json(200, { ok: true, record: rec });
       }
