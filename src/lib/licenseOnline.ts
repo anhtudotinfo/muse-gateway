@@ -110,7 +110,12 @@ async function fetchVerdict(action: 'activate' | 'verify', key: string): Promise
       signal: AbortSignal.timeout(10_000),
     });
     const body: any = await res.json().catch(() => null);
-    if (body?.v && body?.s) writeOnline(body.v, body.s); // store signed verdicts AND denials
+    // 'key_not_activated' can be a KV propagation artifact: a /verify landing
+    // on a different POP within seconds of /activate misses the fresh record.
+    // Never let it overwrite a still-valid ok verdict — real revocations
+    // (revoked/deleted/expired) carry distinct reasons and still overwrite.
+    const lagDeny = body?.ok === false && body?.reason === 'key_not_activated' && onlineOk(key).ok;
+    if (body?.v && body?.s && !lagDeny) writeOnline(body.v, body.s); // store signed verdicts AND denials
     if (!body?.ok) return { ok: false, reason: String(body?.reason || `http_${res.status}`) };
     return { ok: true, reason: 'ok' };
   } catch (e: any) {
