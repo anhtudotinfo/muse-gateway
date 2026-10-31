@@ -129,9 +129,16 @@ function openDashboard() {
 function autoOn() {
   try { execSync('reg query "' + REG_KEY + '" /v MuseGateway', { stdio: 'pipe' }); return true; } catch { return false; }
 }
+// Run value must not point at the exe directly — it is a console-
+// subsystem binary, so Windows gives it a terminal window at every
+// login (closing it kills the server). wscript + VBS with window style
+// 0 starts it with no console; the tray NotifyIcon still appears.
 function toggleAuto() {
   if (autoOn()) { execSync('reg delete "' + REG_KEY + '" /v MuseGateway /f', { stdio: 'pipe' }); return false; }
-  execSync('reg add "' + REG_KEY + '" /v MuseGateway /d "\\\\"" + process.execPath + "\\\\"" /f', { stdio: 'pipe' });
+  const vbs = path.join(dir, 'data', 'muse-gateway-autostart.vbs');
+  fs.writeFileSync(vbs, 'Set sh = CreateObject("WScript.Shell")\\r\\nsh.Run """' + process.execPath + '""", 0, False\\r\\n');
+  const regVal = 'wscript.exe "' + vbs + '"';
+  execSync('reg add "' + REG_KEY + '" /v MuseGateway /d "' + regVal.replace(/"/g, '\\\\"') + '" /f', { stdio: 'pipe' });
   return true;
 }
 try {
