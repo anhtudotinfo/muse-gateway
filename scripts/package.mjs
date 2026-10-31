@@ -230,6 +230,21 @@ const walkJs = (d) => {
   }
 };
 walkJs(serverDir);
+// Snapshot every integrity-hashed file BEFORE obfuscation — if AV eats a
+// file anywhere between here and .lk write, the manifest would happily
+// hash the surviving tree and we'd ship a silently broken build. The
+// ship-check at pack time asserts every one of these still exists.
+const preObfFiles = [path.join(dist, 'server.js')];
+{
+  const snapAll = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) snapAll(p);
+      else if (/\.(js|json|map|cjs|mjs)$/i.test(e.name)) preObfFiles.push(p);
+    }
+  };
+  snapAll(serverDir);
+}
 // Chunks that inject functions into the browser page (page.evaluate,
 // waitForFunction, evaluateOnNewDocument, ...) can only get transforms
 // that keep every function body self-contained: any transform that
@@ -240,24 +255,37 @@ walkJs(serverDir);
 // compaction are safe: they preserve scope. Everything else stays off.
 const PAGE_CTX_RE =
   /\.(evaluate|evaluateOnNewDocument|waitForFunction|exposeFunction|addInitScript)\s*\(/;
+// Two-tier obfuscation — heuristic antivirus (Defender "Trojan:Script/
+// Wacatac.B!ml") routinely flags the FULL profile's string-array +
+// self-defending + control-flow output. A flagged+quarantined chunk trips
+// the integrity gate and bricks a licensed install — it happened in the
+// wild on a chunk with NO license content. Heavy profile is reserved for
+// chunks that actually contain license code (MARKERS); everything else
+// gets the light profile — still renamed+compacted, far less AV bait.
+const LIGHT_OPTS =
+  `--string-array false --split-strings false --self-defending false ` +
+  `--control-flow-flattening false --simplify false ` +
+  `--identifier-names-generator hexadecimal --rename-globals false ` +
+  `--numbers-to-expressions true`;
+const HEAVY_OPTS =
+  `--control-flow-flattening true --control-flow-flattening-threshold 0.5 ` +
+  `--string-array true --string-array-encoding base64 --string-array-threshold 0.9 ` +
+  `--split-strings true --split-strings-chunk-length 8 ` +
+  `--identifier-names-generator hexadecimal --rename-globals false ` +
+  `--self-defending true --simplify true --numbers-to-expressions true`;
 for (const f of obfuscatable) {
   if (!fs.existsSync(f)) continue;
-  const pageCtx = PAGE_CTX_RE.test(fs.readFileSync(f, 'utf8'));
-  const opts = pageCtx
-    ? `--string-array false --split-strings false --self-defending false ` +
-      `--control-flow-flattening false --simplify false ` +
-      `--identifier-names-generator hexadecimal --rename-globals false ` +
-      `--numbers-to-expressions true`
-    : `--control-flow-flattening true --control-flow-flattening-threshold 0.5 ` +
-      `--string-array true --string-array-encoding base64 --string-array-threshold 0.9 ` +
-      `--split-strings true --split-strings-chunk-length 8 ` +
-      `--identifier-names-generator hexadecimal --rename-globals false ` +
-      `--self-defending true --simplify true --numbers-to-expressions true`;
+  const srcText = fs.readFileSync(f, 'utf8');
+  const pageCtx = PAGE_CTX_RE.test(srcText);
+  const licenseCritical = MARKERS.some((m) => srcText.includes(m));
+  const opts = pageCtx || !licenseCritical ? LIGHT_OPTS : HEAVY_OPTS;
   execSync(
     `npx --yes javascript-obfuscator@4.1.1 "${f}" --output "${f}" --target node --compact true ${opts}`,
     { stdio: 'inherit' }
   );
-  console.log(`  obfuscated ${path.relative(dist, f)}${pageCtx ? ' (page-context profile)' : ''}`);
+  console.log(
+    `  obfuscated ${path.relative(dist, f)}${pageCtx ? ' (page-context profile)' : licenseCritical ? ' (license profile)' : ' (light)'}`
+  );
 }
 
 // Integrity manifest: sha256 over server.js + every .next/server file. The
@@ -483,6 +511,68 @@ for (const item of ['AGENTS.md', 'CLAUDE.md', 'README.txt']) {
 // Fresh icon for the npm tray too.
 if (fs.existsSync(path.join(trayDir, 'icon.ico'))) {
   fs.copyFileSync(path.join(trayDir, 'icon.ico'), path.join(npmDist, 'tray', 'icon.ico'));
+}
+
+// ── 6b. Integrity self-check — re-hash the ship trees against .lk. If
+// antivirus quarantined a chunk mid-build (or a packaging step wrote into
+// .next/server after the manifest), every install would fail the runtime
+// gate with a misleading "license required" — catch it here, not in prod.
+// Defender's own scanner runs over dist first: heuristic engines flag the
+// heavy obfuscation profile as Wacatac.B!ml and quarantine the file — the
+// hash check below then fails loudly instead of shipping a build that
+// bricks licensed installs wherever the same heuristic fires.
+try {
+  const mpcmd = 'C:\\Program Files\\Windows Defender\\MpCmdRun.exe';
+  if (fs.existsSync(mpcmd)) {
+    console.log('  AV smoke test: Defender custom scan on dist/…');
+    try {
+      execSync(`"${mpcmd}" -Scan -ScanType 3 -File "${dist}"`, { stdio: 'inherit' });
+    } catch {
+      // non-zero exit = detection reported — hash check below decides
+    }
+  }
+} catch {
+  // scanner unavailable — hash check alone still guards
+}
+{
+  const { createHash } = await import('node:crypto');
+  const missing = preObfFiles.filter((f) => !fs.existsSync(f));
+  if (missing.length > 0) {
+    throw new Error(
+      `packaging bug: ${missing.length} file(s) vanished during packaging — antivirus quarantine?\n  ${missing.join('\n  ')}`
+    );
+  }
+  for (const crit of [path.join(dist, 'muse-gateway.exe'), path.join(npmApp, 'server.js')]) {
+    if (!fs.existsSync(crit)) {
+      throw new Error(`packaging bug: ${crit} vanished mid-build — antivirus quarantine?`);
+    }
+  }
+  const checkTree = (appDir, label) => {
+    const srv = path.join(appDir, '.next', 'server');
+    const expected = fs.readFileSync(path.join(srv, '.lk'), 'utf8').trim();
+    const hh = createHash('sha256');
+    const files = [path.join(appDir, 'server.js')];
+    const walkAll = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walkAll(p);
+        else if (/\.(js|json|map|cjs|mjs)$/i.test(e.name)) files.push(p);
+      }
+    };
+    walkAll(srv);
+    files.sort();
+    for (const f of files) {
+      hh.update(path.relative(srv, f).replace(/\\/g, '/'));
+      hh.update(fs.readFileSync(f));
+    }
+    if (hh.digest('hex') !== expected) {
+      throw new Error(
+        `packaging bug: integrity manifest mismatch in ${label} — a hashed file was lost or modified after .lk was written (antivirus quarantine?)`
+      );
+    }
+  };
+  checkTree(dist, 'exe dist');
+  checkTree(npmApp, 'npm app');
 }
 
 const tgz = execSync('npm pack --pack-destination "' + distRoot + '"', {

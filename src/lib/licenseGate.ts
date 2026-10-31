@@ -111,16 +111,35 @@ function serverTreeIntact(): boolean {
  * Returns a NextResponse(402) to send back, or null when licensed.
  */
 export function licenseGate(corsHeaders: Record<string, string>): NextResponse | null {
-  if (licensedNow() && serverTreeIntact()) return null;
-  return NextResponse.json(
-    {
-      error: {
-        message:
-          'License required — chưa kích hoạt bản quyền. Mua license key tại https://www.storetiki.online (hỗ trợ: Telegram @ministoretiki_bbqqvv_bot) rồi nhập key ở tab Bản quyền trên dashboard.',
-        type: 'license_error',
-        code: 'license_required',
+  if (!licensedNow()) {
+    return NextResponse.json(
+      {
+        error: {
+          message:
+            'License required — chưa kích hoạt bản quyền. Mua license key tại https://www.storetiki.online (hỗ trợ: Telegram @ministoretiki_bbqqvv_bot) rồi nhập key ở tab Bản quyền trên dashboard.',
+          type: 'license_error',
+          code: 'license_required',
+        },
       },
-    },
-    { status: 402, headers: corsHeaders }
-  );
+      { status: 402, headers: corsHeaders }
+    );
+  }
+  if (!serverTreeIntact()) {
+    // License is valid but the package tree doesn't match its manifest —
+    // for legitimate installs the common cause is antivirus quarantining
+    // an obfuscated chunk; point at the remedy instead of a misleading
+    // "license required".
+    return NextResponse.json(
+      {
+        error: {
+          message:
+            'Gateway package integrity check failed — một file trong package đã bị sửa hoặc bị xóa (thường do antivirus/Defender cách ly nhầm). Thêm thư mục cài đặt vào exclusion rồi cài lại (npm i -g muse-gateway) hoặc khôi phục file trong Protection history, sau đó khởi động lại gateway.',
+          type: 'license_error',
+          code: 'integrity_failed',
+        },
+      },
+      { status: 402, headers: corsHeaders }
+    );
+  }
+  return null;
 }
