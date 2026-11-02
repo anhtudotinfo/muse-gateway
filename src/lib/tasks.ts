@@ -200,6 +200,16 @@ class TaskService {
     return null;
   }
 
+  /** Dashboard view: every key's tasks, with the prompt and key name the
+   *  public API leaves out. Local-only — /api/* is closed to tunnel traffic. */
+  dashboardList(limit: number) {
+    return this.list('open', limit).map((task) => ({
+      ...taskView(task),
+      prompt: task.prompt,
+      key_name: task.owner,
+    }));
+  }
+
   list(owner: string, limit: number): TaskRecord[] {
     return [...this.store().values()]
       .filter((task) => owner === 'open' || task.owner === owner)

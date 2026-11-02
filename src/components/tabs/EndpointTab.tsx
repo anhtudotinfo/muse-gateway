@@ -30,6 +30,7 @@ import HelpTooltip from '@/components/endpoint/HelpTooltip';
 import SecurityWarning from '@/components/endpoint/SecurityWarning';
 import KeyAccessControls from '@/components/endpoint/KeyAccessControls';
 import KeySnippetModal from '@/components/endpoint/KeySnippetModal';
+import ApiDocsModal from '@/components/endpoint/ApiDocsModal';
 import type { EndpointKey, KeyAccess } from '@/components/endpoint/types';
 import { useT } from '@/lib/i18n';
 
@@ -903,6 +904,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   };
 
   const [snippetKey, setSnippetKey] = useState<EndpointKey | null>(null);
+  const [showDocs, setShowDocs] = useState(false);
 
   const [baseUrl, setBaseUrl] = useState('/v1');
 
@@ -923,15 +925,28 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   }
 
   const currentEndpoint = baseUrl;
+  const v1 = (url: string) => `${url.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+  const docsEndpoints = [
+    { label: 'Local', url: currentEndpoint },
+    ...(tunnelEnabled && (tunnelPublicUrl || tunnelUrl)
+      ? [{ label: 'Tunnel', url: v1(tunnelPublicUrl || tunnelUrl) }]
+      : []),
+    ...(tsEnabled && tsUrl ? [{ label: 'Tailscale', url: v1(tsUrl) }] : []),
+  ];
 
   return (
     <div className="ep9r flex flex-col gap-8">
       {/* Endpoint Card */}
       <Card>
-        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary">api</span>
-          API Endpoint
-        </h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">api</span>
+            API Endpoint
+          </h2>
+          <Button variant="secondary" size="sm" icon="menu_book" onClick={() => setShowDocs(true)}>
+            {t('API Docs')}
+          </Button>
+        </div>
 
         {/* Endpoint rows */}
         <div className="flex flex-col gap-2">
@@ -1358,6 +1373,16 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
           </div>
         )}
       </Card>
+
+      <ApiDocsModal
+        isOpen={showDocs}
+        onClose={() => setShowDocs(false)}
+        endpoints={docsEndpoints}
+        keys={keys}
+        revealKey={revealKey}
+        onCopy={copyWithToast}
+        copiedId={copied}
+      />
 
       {/* Client config snippet modal */}
       <KeySnippetModal
