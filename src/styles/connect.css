@@ -231,3 +231,56 @@
   .con-ep-grid .con-url { grid-column: 1 / -1; grid-row: 2; }
   .con-ep-note { margin-left: 0; }
 }
+
+/* ---- Pairing approval page (/pair/<id>) ---- */
+.pair-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--apple-bg, #0b0b10);
+  color: var(--text-primary);
+  font-family: Inter, system-ui, sans-serif;
+}
+.pair-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 32px 28px;
+  border-radius: 16px;
+  background: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.pair-logo { width: 44px; height: 44px; }
+.pair-card h1 { margin: 4px 0 0; font-size: 1.2rem; font-weight: 700; }
+.pair-muted { margin: 0; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; }
+.pair-code {
+  margin: 6px 0;
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--apple-border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+.pair-meta {
+  width: 100%;
+  margin: 4px 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  text-align: left;
+  font-size: 0.8rem;
+}
+.pair-meta dt { color: var(--text-tertiary); }
+.pair-meta dd { margin: 0; color: var(--text-primary); word-break: break-all; }
+.pair-actions { display: flex; gap: 10px; margin-top: 10px; }
+.pair-actions .acc2-btn { min-height: 42px; padding: 0 22px; }
+.pair-foot { margin: 6px 0 0; font-size: 0.72rem; color: var(--text-tertiary); }

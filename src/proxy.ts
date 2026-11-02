@@ -83,7 +83,11 @@ export function proxy(request: NextRequest) {
   // kills localhost CSRF without affecting curl/scripts (no headers) or the
   // same-origin dashboard (sec-fetch-site: same-origin / no Origin).
   const method = request.method;
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+  // Starting a pairing request is the one cross-site POST allowed: apps such
+  // as the Tauri webview live on another origin, and the request does nothing
+  // until the user approves it on the gateway's own page (which stays guarded).
+  const pairStart = request.nextUrl.pathname === '/api/pair';
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && !pairStart) {
     if (request.headers.get('sec-fetch-site') === 'cross-site') {
       return NextResponse.json({ error: 'forbidden_origin', message: 'Cross-site requests are not allowed.' }, { status: 403 });
     }
