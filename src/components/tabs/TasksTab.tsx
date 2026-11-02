@@ -8,6 +8,7 @@ import { useT } from '@/lib/i18n';
 
 interface DashboardTask {
   id: string;
+  source: 'api' | 'chat';
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   model: string;
   prompt: string;
@@ -125,7 +126,7 @@ export function TasksTab() {
     <div className="ep9r flex flex-col gap-6">
       <Card
         title={t('Tasks')}
-        subtitle={t('Image and video jobs sent through /v1/tasks. Refreshes every 5 seconds.')}
+        subtitle={t('Image and video jobs from /v1/tasks and from chat requests such as SparkCut. Refreshes every 5 seconds.')}
         icon="task_alt"
         action={
           <Button variant="secondary" size="sm" icon="refresh" onClick={() => void load()}>
@@ -158,7 +159,7 @@ export function TasksTab() {
           <div className="py-10 text-center">
             <p className="text-sm font-medium text-text-main">{t('No tasks yet')}</p>
             <p className="text-xs text-text-muted mt-1">
-              {t('Create one with POST /v1/tasks. API Docs on the Overview page has ready-to-run examples.')}
+              {t('Generate an image or video from a connected tool, or call POST /v1/tasks. API Docs on the Overview page has ready-to-run examples.')}
             </p>
           </div>
         ) : (
@@ -186,7 +187,7 @@ export function TasksTab() {
                       </td>
                       <td className="py-2.5 pr-3 max-w-[340px]">
                         <div className="text-xs font-mono text-text-muted">
-                          {task.model} · {t('key')} {task.key_name}
+                          {task.source === 'chat' ? 'Chat' : 'API'} · {task.model} · {t('key')} {task.key_name}
                         </div>
                         <div className="text-xs text-text-main truncate" title={task.prompt}>
                           {task.prompt}
@@ -234,7 +235,7 @@ export function TasksTab() {
                         )}
                       </td>
                       <td className="py-2.5 text-right whitespace-nowrap">
-                        {(task.status === 'running' || task.status === 'queued') && (
+                        {task.source !== 'chat' && (task.status === 'running' || task.status === 'queued') && (
                           <Button
                             variant="ghost"
                             size="xs"

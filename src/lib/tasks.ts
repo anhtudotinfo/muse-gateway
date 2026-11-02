@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { dataPath } from './dataDir';
 import { assertDialableUrl } from './imageRefs';
 import { mediaKindOf, type MediaInfo, withOrigin } from './mediaResult';
+import type { ChatResult } from './museDriver';
 import { musePool } from './musePool';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { buildTaskPrompt, signWebhook, type TaskInput } from './taskInput';
@@ -14,6 +15,9 @@ export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancel
 
 interface TaskRecord {
   id: string;
+  /** `chat` = a media generation seen on /v1/chat/completions, tracked so
+   *  the dashboard shows it too. Absent on records from before it existed. */
+  source?: 'api' | 'chat';
   status: TaskStatus;
   model: string;
   prompt: string;
@@ -63,6 +67,7 @@ export function taskView(task: TaskRecord) {
   return {
     id: task.id,
     object: 'task',
+    source: task.source ?? 'api',
     status: task.status,
     model: task.model,
     created_at: seconds(task.createdAt),
@@ -168,24 +173,79 @@ class TaskService {
         idem: task.id,
       });
       if (task.status !== 'running') return; // cancelled while waiting
-      const media: MediaInfo[] = (
-        result.mediaInfo ??
-        result.media.map((url) => ({ url, kind: mediaKindOf(url), duration_sec: null }))
-      ).map((item) => ({ ...item, url: withOrigin(item.url, task.origin) }));
-      const shared = {
-        text: result.text,
-        threadUrl: result.threadUrl ?? null,
-        accountId: result.accountId ?? null,
-      };
-      if (/^muse-(video|image)/i.test(task.model) && media.length === 0) {
-        this.finish(task, 'failed', { ...shared, error: `Muse returned no media: ${result.text.slice(0, 300)}` });
-        return;
-      }
-      this.finish(task, 'succeeded', { ...shared, media, partial: !!result.partial });
+      this.complete(task, result);
     } catch (error: any) {
       if (task.status !== 'running') return;
       this.finish(task, 'failed', { error: error?.message || 'Generation failed.' });
     }
+  }
+
+  private complete(task: TaskRecord, result: ChatResult) {
+    const media: MediaInfo[] = (
+      result.mediaInfo ??
+      result.media.map((url) => ({ url, kind: mediaKindOf(url), duration_sec: null }))
+    ).map((item) => ({ ...item, url: withOrigin(item.url, task.origin) }));
+    const shared = {
+      text: result.text,
+      threadUrl: result.threadUrl ?? null,
+      accountId: result.accountId ?? null,
+    };
+    if (/^muse-(video|image)/i.test(task.model) && media.length === 0) {
+      this.finish(task, 'failed', { ...shared, error: `Muse returned no media: ${result.text.slice(0, 300)}` });
+      return;
+    }
+    this.finish(task, 'succeeded', { ...shared, media, partial: !!result.partial });
+  }
+
+  /** Starts a record for a media generation made through chat completions —
+   *  the caller holds the request, so it can't be cancelled or webhooked. */
+  trackChat(input: {
+    model: string;
+    prompt: string;
+    durationSec: number | null;
+    owner: string;
+    origin: string;
+  }): string {
+    const task: TaskRecord = {
+      id: `task_${crypto.randomBytes(12).toString('hex')}`,
+      source: 'chat',
+      status: 'running',
+      model: input.model,
+      prompt: input.prompt,
+      durationSec: input.durationSec,
+      newChat: false,
+      thread: null,
+      account: null,
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+      finishedAt: null,
+      text: null,
+      media: [],
+      partial: false,
+      threadUrl: null,
+      accountId: null,
+      error: null,
+      owner: input.owner,
+      origin: input.origin,
+      idempotencyKey: null,
+      webhookUrl: null,
+      webhookSecret: null,
+      webhookAllowPrivate: false,
+      webhookStatus: null,
+    };
+    this.store().set(task.id, task);
+    this.save();
+    return task.id;
+  }
+
+  completeChat(id: string, result: ChatResult) {
+    const task = this.store().get(id);
+    if (task && !isFinished(task)) this.complete(task, result);
+  }
+
+  failChat(id: string, error: string) {
+    const task = this.store().get(id);
+    if (task && !isFinished(task)) this.finish(task, 'failed', { error });
   }
 
   find(id: string, owner: string): TaskRecord | null {
@@ -220,6 +280,7 @@ class TaskService {
   create(input: TaskInput, images: string[], context: TaskContext): TaskRecord {
     const task: TaskRecord = {
       id: `task_${crypto.randomBytes(12).toString('hex')}`,
+      source: 'api',
       status: 'queued',
       model: input.model,
       prompt: buildTaskPrompt(input),
@@ -253,7 +314,7 @@ class TaskService {
   /** Stops collecting the result. A render already inside Muse keeps going
    *  there — only the gateway's wait can be cancelled. */
   cancel(task: TaskRecord): TaskRecord {
-    if (isFinished(task)) return task;
+    if (isFinished(task) || task.source === 'chat') return task;
     const controller = this.controllers.get(task.id);
     this.finish(task, 'cancelled', {});
     controller?.abort();

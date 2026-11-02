@@ -423,6 +423,8 @@ const DICT: Record<string, DictEntry> = {
     zh: 'Overview  {muc}  ——  {url}。',
   },
   // — Tasks page & API docs —
+  'Image and video jobs from /v1/tasks and from chat requests such as SparkCut. Refreshes every 5 seconds.': { vi: 'Tác vụ tạo ảnh/video từ /v1/tasks và từ request chat như SparkCut. Tự làm mới mỗi 5 giây.', en: 'Image and video jobs from /v1/tasks and from chat requests such as SparkCut. Refreshes every 5 seconds.' },
+  'Generate an image or video from a connected tool, or call POST /v1/tasks. API Docs on the Overview page has ready-to-run examples.': { vi: 'Tạo ảnh hoặc video từ tool đã kết nối, hoặc gọi POST /v1/tasks. Nút API Docs ở trang Tổng quan có sẵn ví dụ chạy được ngay.', en: 'Generate an image or video from a connected tool, or call POST /v1/tasks. API Docs on the Overview page has ready-to-run examples.' },
   'Tasks': { vi: 'Tác vụ', en: 'Tasks' },
   'Image and video jobs sent through /v1/tasks. Refreshes every 5 seconds.': { vi: 'Tác vụ tạo ảnh/video gửi qua /v1/tasks. Tự làm mới mỗi 5 giây.', en: 'Image and video jobs sent through /v1/tasks. Refreshes every 5 seconds.' },
   'Refresh': { vi: 'Làm mới', en: 'Refresh' },
@@ -474,7 +476,7 @@ const DICT: Record<string, DictEntry> = {
   'Up to 60 s per video, 16 reference images of 20 MB each.': { vi: 'Tối đa 60 giây mỗi video, 16 ảnh tham chiếu, mỗi ảnh 20 MB.', en: 'Up to 60 s per video, 16 reference images of 20 MB each.' },
   'Track jobs': { vi: 'Theo dõi', en: 'Track jobs' },
   'Every task shows on the Tasks page.': { vi: 'Mọi tác vụ hiện ở trang Tác vụ.', en: 'Every task shows on the Tasks page.' },
-  'Tác vụ tạo ảnh/video gửi qua /v1/tasks': { en: 'Image and video jobs sent through /v1/tasks' },
+  'Ảnh và video tạo qua gateway': { en: 'Images and videos made through the gateway' },
 };
 
 export function tr(lang: Lang, key: string, vars?: Record<string, string | number>): string {

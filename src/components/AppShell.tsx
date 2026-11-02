@@ -54,7 +54,7 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
   '/accounts': { title: 'Accounts', subtitle: 'Quản lý phiên đăng nhập Muse — lưu nhiều tài khoản' },
   '/combos': { title: 'Combos', subtitle: 'Gom account theo model — fallback / round-robin / fusion' },
   '/usage': { title: 'Usage', subtitle: 'Thống kê request đi qua pool' },
-  '/tasks': { title: 'Tasks', subtitle: 'Tác vụ tạo ảnh/video gửi qua /v1/tasks' },
+  '/tasks': { title: 'Tasks', subtitle: 'Ảnh và video tạo qua gateway' },
   '/quota': { title: 'Quota Tracker', subtitle: 'Trạng thái quota & cooldown từng tài khoản' },
   '/console': { title: 'Console Log', subtitle: 'Log realtime từ driver & pool' },
   '/settings': { title: 'Settings', subtitle: 'Cấu hình runtime & dữ liệu · Công cụ (bookmarklet, extension, token inspector, client config)' },

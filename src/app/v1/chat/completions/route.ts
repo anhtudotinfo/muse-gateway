@@ -9,6 +9,7 @@ import { publicOrigin } from '@/lib/requestOrigin';
 import { collectImageRefs, ImageRefError, loadImageRefs } from '@/lib/imageRefs';
 import { withOrigin } from '@/lib/mediaResult';
 import type { ChatResult } from '@/lib/museDriver';
+import { taskService } from '@/lib/tasks';
 import type { ChatCompletionRequest } from '@/types';
 
 const corsHeaders = {
@@ -92,6 +93,16 @@ export async function POST(req: NextRequest) {
     }
     const durationSec = Number((body as any).duration ?? (body as any).duration_sec) || null;
     const origin = publicOrigin(req);
+    const keyName = apiKey === 'open' ? 'open' : apiKey.name;
+    // Media generations also land on the dashboard's Tasks page.
+    const tracked = /^muse-(video|image)/i.test(model)
+      ? taskService.trackChat({ model, prompt: formattedPrompt, durationSec, owner: keyName, origin })
+      : null;
+    const settle = (result: ChatResult | null, error?: string) => {
+      if (!tracked) return;
+      if (result && !req.signal.aborted) taskService.completeChat(tracked, result);
+      else taskService.failChat(tracked, error || 'The client disconnected before the result arrived.');
+    };
     const museMeta = (result: ChatResult) => ({
       account_id: result.accountId ?? null,
       thread_url: result.threadUrl ?? null,
@@ -100,7 +111,6 @@ export async function POST(req: NextRequest) {
     });
 
     const cwd = extractWorkspaceCwd(body);
-    const keyName = apiKey === 'open' ? 'open' : apiKey.name;
     const completionId = 'chatcmpl-' + Date.now();
     const created = Math.floor(Date.now() / 1000);
 
@@ -163,6 +173,7 @@ export async function POST(req: NextRequest) {
               },
             });
             clearInterval(keepAlive);
+            settle(result);
             const { media, threadUrl } = result;
 
             // Media attachments arrive after the reply completes — emit as a
@@ -213,6 +224,7 @@ export async function POST(req: NextRequest) {
             safeClose();
           } catch (err: any) {
             clearInterval(keepAlive);
+            settle(null, err?.message || 'Upstream error');
             console.error('[API Stream Error]:', err);
             const errPayload = {
               error: { message: err?.message || 'Upstream error', type: 'upstream_error' },
@@ -234,21 +246,28 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle Synchronous / Non-streaming JSON response
-    const result = await musePool.chat({
-      prompt: formattedPrompt,
-      images,
-      signal: req.signal,
-      cwd,
-      model,
-      durationSec,
-      ua,
-      keyName,
-      endpoint: '/v1/chat/completions',
-      newChat: new_chat,
-      thread,
-      pinAccount,
-      idem,
-    });
+    let result: ChatResult;
+    try {
+      result = await musePool.chat({
+        prompt: formattedPrompt,
+        images,
+        signal: req.signal,
+        cwd,
+        model,
+        durationSec,
+        ua,
+        keyName,
+        endpoint: '/v1/chat/completions',
+        newChat: new_chat,
+        thread,
+        pinAccount,
+        idem,
+      });
+    } catch (err: any) {
+      settle(null, err?.message || 'Upstream error');
+      throw err;
+    }
+    settle(result);
     const { text, media, threadUrl } = result;
     const content =
       (media.length
