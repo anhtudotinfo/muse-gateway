@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Modal from '@/components/endpoint/ui/Modal';
 import Button from '@/components/endpoint/ui/Button';
 import { useT } from '@/lib/i18n';
 import { useApp } from '@/components/AppShell';
+import { HeaderSlot } from '@/components/HeaderSlot';
 import { maskName } from '@/lib/mask';
 import { MediaPreview, isVideo, localMediaUrl, type DashboardTask } from '@/components/tabs/MediaTab';
 
@@ -39,13 +39,6 @@ const STRATEGY_LABEL: Record<string, string> = {
 };
 
 const GUIDE_DISMISSED_KEY = 'muse_guide_dismissed';
-
-/** Header controls live in the shell's header row, next to the title. */
-function HeaderSlot({ children }: { children: React.ReactNode }) {
-  const [el, setEl] = useState<HTMLElement | null>(null);
-  useEffect(() => setEl(document.getElementById('page-header-slot')), []);
-  return el ? createPortal(children, el) : null;
-}
 
 export function OverviewTab() {
   const router = useRouter();

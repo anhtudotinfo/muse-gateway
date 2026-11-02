@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/components/AppShell';
 import { ActionsMenu } from '@/components/ActionsMenu';
+import { HeaderSlot } from '@/components/HeaderSlot';
 import { maskName } from '@/lib/mask';
 import type { Profile } from '@/types';
 import type { PoolAccountView } from '@/lib/musePool';
@@ -10,7 +11,8 @@ import type { PoolAccountView } from '@/lib/musePool';
 interface ProfilesTabProps {
   profiles: Profile[];
   onRefresh: () => void;
-  onUseProfile: (profile: Profile) => void;
+  /** Opens the Add account dialog. */
+  onAdd: () => void;
   onDeleteProfile: (id: string, name: string) => void;
   onLaunchProfile?: (profile: Profile) => void;
   launchingProfileId?: string | null;
@@ -43,7 +45,7 @@ function cookieInfo(cookies: string) {
 export function ProfilesTab({
   profiles,
   onRefresh,
-  onUseProfile,
+  onAdd,
   onDeleteProfile,
   onLaunchProfile,
   launchingProfileId,
@@ -240,210 +242,221 @@ export function ProfilesTab({
     }
   };
 
+  const now = Date.now();
+  const ago = (ts: number) => {
+    const ms = now - ts;
+    if (ms < 60_000) return 'vừa xong';
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} phút trước`;
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} giờ trước`;
+    return `${Math.floor(ms / 86_400_000)} ngày trước`;
+  };
+  const fmtChecked = (iso?: string | null) =>
+    iso
+      ? `Kiểm tra ${new Date(iso).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}`
+      : 'Chưa kiểm tra';
+
+  const poolOf = (id: string) => pool[id];
+  const taking = profiles.filter((p) => {
+    const a = poolOf(p.id);
+    return a && a.enabled && a.cooldownRemainingMs <= 0;
+  }).length;
+  const cooling = profiles.filter((p) => (poolOf(p.id)?.cooldownRemainingMs ?? 0) > 0).length;
+  const expired = profiles.filter((p) => p.lastStatus === 'invalid').length;
+
   return (
-    <div className="tab-surface">
-      <div className="ov-card-head">
-        <div>
-          <div className="ov-card-title">Tài khoản đã lưu <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>({profiles.length})</span></div>
-          <div className="ov-card-desc">Mở trực tiếp hoặc nạp lại vào ô nhập phía trên.</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <label
-            className="apple-tool-btn"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-            title={`Ping session mỗi ${keepAliveMin} phút giữ cookie ấm`}
-          >
-            <input
-              type="checkbox"
-              checked={keepAlive}
-              onChange={(e) => toggleKeepAlive(e.target.checked)}
-              style={{ accentColor: 'var(--color-primary, #6c5ce7)' }}
-            />
-            Keep-alive {keepAliveMin}m
-          </label>
-          <ActionsMenu
-            items={[
-              {
-                label: keeping ? 'Đang ping…' : '⚡ Keep-alive tất cả',
-                disabled: keeping,
-                onClick: runKeepAliveAll,
-              },
-              {
-                label: testingProfileId === 'all' ? 'Đang kiểm tra…' : 'Kiểm tra tất cả',
-                disabled: !profiles.length || testingProfileId === 'all',
-                onClick: () => onTestAll?.(),
-              },
-              {
-                label: 'Sao lưu toàn bộ (backup)',
-                onClick: backupAll,
-              },
-              {
-                label: restoring ? 'Đang khôi phục…' : 'Khôi phục backup…',
-                disabled: restoring,
-                onClick: () => backupRef.current?.click(),
-              },
-              {
-                label: 'Xuất tài khoản (.json)',
-                disabled: !profiles.length,
-                onClick: exportAccounts,
-              },
-              {
-                label: importing ? 'Đang nhập…' : 'Nhập tài khoản…',
-                disabled: importing,
-                onClick: () => fileRef.current?.click(),
-              },
-              { label: 'Làm mới', onClick: onRefresh },
-            ]}
-          />
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: 'none' }}
-            onChange={(e) => e.target.files?.[0] && importAccounts(e.target.files[0])}
-          />
-          <input
-            ref={backupRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: 'none' }}
-            onChange={(e) => e.target.files?.[0] && restoreBackup(e.target.files[0])}
-          />
-        </div>
-      </div>
+    <>
+      <HeaderSlot>
+        <button
+          type="button"
+          className="acc2-btn"
+          onClick={() => onTestAll?.()}
+          disabled={!profiles.length || !!testingProfileId}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" />
+          </svg>
+          {testingProfileId === 'all' ? 'Đang kiểm tra…' : 'Kiểm tra tất cả'}
+        </button>
+        <ActionsMenu
+          title="Thao tác khác"
+          items={[
+            { label: keeping ? 'Đang ping…' : 'Ping giữ session ngay', disabled: keeping || !profiles.length, onClick: runKeepAliveAll },
+            { label: 'Sao lưu toàn bộ (backup)', onClick: backupAll },
+            { label: restoring ? 'Đang khôi phục…' : 'Khôi phục backup…', disabled: restoring, onClick: () => backupRef.current?.click() },
+            { label: 'Xuất tài khoản (.json)', disabled: !profiles.length, onClick: exportAccounts },
+            { label: importing ? 'Đang nhập…' : 'Nhập tài khoản…', disabled: importing, onClick: () => fileRef.current?.click() },
+            { label: 'Làm mới', onClick: onRefresh },
+          ]}
+        />
+        <button type="button" className="acc2-btn primary" onClick={onAdd}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Thêm tài khoản
+        </button>
+      </HeaderSlot>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(e) => e.target.files?.[0] && importAccounts(e.target.files[0])}
+      />
+      <input
+        ref={backupRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(e) => e.target.files?.[0] && restoreBackup(e.target.files[0])}
+      />
 
-      {profiles.length === 0 ? (
-        <div className="ov-empty">
-          Chưa có tài khoản nào được lưu.
-          <div style={{ marginTop: 6, fontSize: '0.72rem', color: 'var(--text-quaternary)' }}>
-            Dán cookie ở trên (mỗi dòng 1 tài khoản) rồi bấm «Thêm tài khoản».
+      <div className="acc2">
+        <section className="acc2-summary" aria-label="Tóm tắt">
+          <div className="acc2-summary-stats">
+            <span><b>{profiles.length}</b> tài khoản</span>
+            <span><b className="ok">{taking}</b> nhận request</span>
+            <span><b>{cooling}</b> cooldown</span>
+            <span><b className={expired ? 'bad' : ''}>{expired}</b> hết hạn</span>
           </div>
-        </div>
-      ) : (
-        <div className="acc-grid">
-          {profiles.map((p) => {
-            const { count, hasSess } = cookieInfo(p.cookies);
-            const busy = launchingProfileId === p.id;
-            const testing = testingProfileId === p.id || testingProfileId === 'all';
-            // Liveness badge: LIVE / DEAD after a check, else cookie-shape hint.
-            const badge = testing
-              ? { cls: 'running', label: 'Đang kiểm tra…' }
-              : p.lastStatus === 'valid'
-                ? { cls: 'done', label: 'LIVE' }
-                : p.lastStatus === 'invalid'
-                  ? { cls: 'failed', label: 'DEAD' }
-                  : hasSess
-                    ? { cls: 'done', label: 'Session' }
-                    : { cls: 'running', label: 'Thiếu sess' };
-            return (
-              <div key={p.id} className="acc-card">
-                <div className="acc-card-top">
-                  <span className="acc-avatar" style={{ background: avatarColor(p.name) }}>
-                    {p.name.trim().charAt(0).toUpperCase()}
-                  </span>
-                  <div className="acc-name-block">
-                    <div className="acc-name" title={maskEmails ? undefined : p.name}>{maskName(p.name, maskEmails)}</div>
-                    <div className="acc-sub">
-                      Muse session{p.lastTested ? ` · test ${new Date(p.lastTested).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
-                    </div>
-                  </div>
-                  <span className={`ov-status-chip ${badge.cls}`}>{badge.label}</span>
-                </div>
+          <label className="acc2-check">
+            <input type="checkbox" checked={keepAlive} onChange={(e) => toggleKeepAlive(e.target.checked)} />
+            Giữ session sống — ping mỗi {keepAliveMin} phút
+          </label>
+        </section>
 
-                {pool[p.id] && (() => {
-                  const a = pool[p.id];
-                  const state = !a.enabled
-                    ? { cls: 'off', label: 'Tắt trong pool' }
-                    : a.cooldownRemainingMs > 0
-                      ? { cls: 'failed', label: `Cooldown ${Math.ceil(a.cooldownRemainingMs / 60000)} phút` }
-                      : a.status === 'busy'
-                        ? { cls: 'running', label: 'Đang gửi' }
-                        : { cls: 'done', label: 'Nhận request' };
-                  const busyLanes = a.lanes?.lanes.filter((l) => l.busy).length ?? 0;
-                  return (
-                    <div className="acc-pool-row">
-                      <span className={`acc-pool-state ${state.cls}`}>{state.label}</span>
-                      <span>{a.totalRequests} request</span>
-                      {busyLanes > 0 && <span>{busyLanes} luồng đang chạy</span>}
-                      {a.lastError && a.failCount > 0 && (
-                        <span className="acc-pool-error" title={a.lastError}>{a.lastError}</span>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                <div className="acc-meta-row">
-                  <span>{count} cookies</span>
-                  <span>·</span>
-                  <span>{new Date(p.updatedAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                  {p.proxy && (
-                    <>
-                      <span>·</span>
-                      <span title={p.proxy} style={{ color: 'var(--color-primary, #6c5ce7)' }}>⇄ proxy</span>
-                    </>
-                  )}
-                </div>
-
-                <div className="acc-card-actions">
-                  {onRelogin && p.lastStatus === 'invalid' ? (
-                    <button
-                      type="button"
-                      className="acc-btn primary"
-                      onClick={() => onRelogin(p)}
-                      disabled={capturingProfileId === p.id}
-                      title="Mở trình duyệt — đăng nhập lại, session tự cập nhật vào thẻ này"
-                    >
-                      {capturingProfileId === p.id ? 'Đang chờ…' : '🔐 Đăng nhập lại'}
-                    </button>
-                  ) : (
-                    onLaunchProfile && (
-                      <button
-                        type="button"
-                        className="acc-btn primary"
-                        onClick={() => onLaunchProfile(p)}
-                        disabled={busy}
-                        title="Mở trình duyệt với tài khoản này"
-                      >
-                        {busy ? 'Đang mở…' : '▶ Mở'}
-                      </button>
-                    )
-                  )}
-                  {onTestProfile && (
-                    <button
-                      type="button"
-                      className="acc-btn"
-                      onClick={() => onTestProfile(p)}
-                      disabled={testing}
-                      title="Kiểm tra session còn sống không"
-                    >
-                      {testing ? 'Đang test…' : '↻ Kiểm tra'}
-                    </button>
-                  )}
-                  <ActionsMenu
-                    items={[
-                      { label: 'Nạp vào ô nhập', onClick: () => onUseProfile(p) },
-                      { label: 'Đổi tên…', onClick: () => onRenameProfile?.(p) },
-                      { label: p.proxy ? 'Đổi proxy…' : 'Đặt proxy…', onClick: () => void setProxy(p) },
-                      ...(pool[p.id]
-                        ? [
-                            pool[p.id].enabled
-                              ? { label: 'Tạm tắt trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: false }, 'Đã tắt tài khoản trong pool') }
-                              : { label: 'Bật lại trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: true }, 'Đã bật tài khoản trong pool') },
-                            ...(pool[p.id].cooldownRemainingMs > 0 || pool[p.id].failCount > 0
-                              ? [{ label: 'Xoá cooldown', onClick: () => void patchPool({ accountId: p.id, resetCooldown: true }, 'Đã xoá cooldown') }]
-                              : []),
-                          ]
-                        : []),
-                      ...(onRelogin ? [{ label: 'Đăng nhập lại (trình duyệt)', onClick: () => onRelogin(p) }] : []),
-                      { label: 'Xóa tài khoản', danger: true, onClick: () => onDeleteProfile(p.id, p.name) },
-                    ]}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+        <section className="acc2-card" aria-label="Danh sách tài khoản">
+          {profiles.length === 0 ? (
+            <div className="acc2-empty">
+              <div className="acc2-empty-title">Chưa có tài khoản nào</div>
+              <p>Thêm tài khoản Muse đầu tiên để pool bắt đầu nhận request.</p>
+              <button type="button" className="acc2-btn primary" onClick={onAdd}>Thêm tài khoản</button>
+            </div>
+          ) : (
+            <div className="acc2-scroll">
+              <table className="acc2-table">
+                <thead>
+                  <tr>
+                    <th>Tài khoản</th>
+                    <th>Session</th>
+                    <th>Trong pool</th>
+                    <th className="num">Request</th>
+                    <th>Dùng lần cuối</th>
+                    <th><span className="sr-only">Thao tác</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {profiles.map((p) => {
+                    const { hasSess } = cookieInfo(p.cookies);
+                    const a = poolOf(p.id);
+                    const testing = testingProfileId === p.id || testingProfileId === 'all';
+                    const capturing = capturingProfileId === p.id;
+                    const session = testing
+                      ? { cls: 'pending', label: 'Đang kiểm tra…' }
+                      : p.lastStatus === 'valid'
+                        ? { cls: 'ok', label: 'Còn sống' }
+                        : p.lastStatus === 'invalid'
+                          ? { cls: 'bad', label: 'Hết hạn' }
+                          : hasSess
+                            ? { cls: 'idle', label: 'Chưa kiểm tra' }
+                            : { cls: 'bad', label: 'Thiếu cookie' };
+                    const poolState = !a
+                      ? { cls: 'idle', label: '—' }
+                      : !a.enabled
+                        ? { cls: 'idle', label: 'Tắt' }
+                        : a.cooldownRemainingMs > 0
+                          ? { cls: 'bad', label: `Cooldown ${Math.ceil(a.cooldownRemainingMs / 60000)} phút` }
+                          : a.status === 'busy'
+                            ? { cls: 'busy', label: 'Đang gửi' }
+                            : { cls: 'ok', label: 'Nhận request' };
+                    return (
+                      <tr key={p.id}>
+                        <td>
+                          <div className="acc2-who">
+                            <span className="acc2-avatar" style={{ background: avatarColor(p.name) }} aria-hidden="true">
+                              {p.name.trim().charAt(0).toUpperCase()}
+                            </span>
+                            <div className="acc2-who-text">
+                              <div className="acc2-name" title={maskEmails ? undefined : p.name}>{maskName(p.name, maskEmails)}</div>
+                              <div className="acc2-sub">
+                                {fmtChecked(p.lastTested)}
+                                {p.proxy && <span className="acc2-tag" title={p.proxy}>proxy</span>}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          <span className={`acc2-pill ${session.cls}`}><span className="acc2-dot" />{session.label}</span>
+                        </td>
+                        <td>
+                          <span className={`acc2-pool ${poolState.cls}`} title={a?.lastError || undefined}>{poolState.label}</span>
+                        </td>
+                        <td className="num">{a ? a.totalRequests : '—'}</td>
+                        <td className="acc2-muted">{a && a.lastUsedAt > 0 ? ago(a.lastUsedAt) : '—'}</td>
+                        <td>
+                          <div className="acc2-actions">
+                            {p.lastStatus === 'invalid' && onRelogin ? (
+                              <button type="button" className="acc2-btn primary small" onClick={() => onRelogin(p)} disabled={capturing}>
+                                {capturing ? 'Đang chờ…' : 'Đăng nhập lại'}
+                              </button>
+                            ) : (
+                              onLaunchProfile && (
+                                <button
+                                  type="button"
+                                  className="acc2-icon-btn"
+                                  onClick={() => onLaunchProfile(p)}
+                                  disabled={launchingProfileId === p.id}
+                                  aria-label={`Mở Muse bằng ${maskName(p.name, maskEmails)}`}
+                                  title="Mở trình duyệt"
+                                >
+                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3" />
+                                  </svg>
+                                </button>
+                              )
+                            )}
+                            {onTestProfile && (
+                              <button
+                                type="button"
+                                className="acc2-icon-btn"
+                                onClick={() => onTestProfile(p)}
+                                disabled={testing}
+                                aria-label="Kiểm tra session"
+                                title="Kiểm tra session"
+                              >
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                  <path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" />
+                                </svg>
+                              </button>
+                            )}
+                            <ActionsMenu
+                              items={[
+                                { label: 'Đổi tên…', onClick: () => onRenameProfile?.(p) },
+                                { label: p.proxy ? 'Đổi proxy…' : 'Đặt proxy…', onClick: () => void setProxy(p) },
+                                ...(a
+                                  ? [
+                                      a.enabled
+                                        ? { label: 'Tạm tắt trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: false }, 'Đã tắt tài khoản trong pool') }
+                                        : { label: 'Bật lại trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: true }, 'Đã bật tài khoản trong pool') },
+                                      ...(a.cooldownRemainingMs > 0 || a.failCount > 0
+                                        ? [{ label: 'Xoá cooldown', onClick: () => void patchPool({ accountId: p.id, resetCooldown: true }, 'Đã xoá cooldown') }]
+                                        : []),
+                                    ]
+                                  : []),
+                                ...(onRelogin ? [{ label: 'Đăng nhập lại (trình duyệt)', onClick: () => onRelogin(p) }] : []),
+                                { label: 'Xóa tài khoản', danger: true, onClick: () => onDeleteProfile(p.id, p.name) },
+                              ]}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
+    </>
   );
 }

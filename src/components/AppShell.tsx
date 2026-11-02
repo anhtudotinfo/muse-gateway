@@ -12,9 +12,8 @@ import React, {
   useMemo,
 } from 'react';
 import { usePathname } from 'next/navigation';
-import type { Profile, BrowserDetection, CookieMap } from '@/types';
+import type { Profile, BrowserDetection } from '@/types';
 import { useToast } from '@/hooks/useToast';
-import { useCookieParser } from '@/hooks/useCookieParser';
 import { Sidebar } from '@/components/Sidebar';
 import { UpdateBanner, type UpdateInfo } from '@/components/UpdateBanner';
 import { AppleToastStage } from '@/components/AppleToastStage';
@@ -25,8 +24,6 @@ interface AppContextValue {
   copyText: (text: string, label: string) => void;
   cookieInput: string;
   setCookieInput: (v: string) => void;
-  parsedMap: CookieMap;
-  cookieCount: number;
   profiles: Profile[];
   reloadProfiles: () => Promise<Profile[]>;
   selectedBrowser: 'chrome' | 'edge';
@@ -84,7 +81,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     }).catch(() => {});
   }, []);
 
-  const { parsedMap, cookieCount } = useCookieParser(cookieInput);
 
   const reloadProfiles = useCallback(async () => {
     try {
@@ -115,9 +111,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       .then((u) => setUpdate(u))
       .catch(() => {});
 
-    reloadProfiles().then((list) => {
-      if (list && list.length > 0) setCookieInput((v) => v || list[0].cookies);
-    });
+    void reloadProfiles();
   }, [reloadProfiles]);
 
   const copyText = useCallback(
@@ -167,8 +161,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       copyText,
       cookieInput,
       setCookieInput,
-      parsedMap,
-      cookieCount,
       profiles,
       reloadProfiles,
       selectedBrowser,
@@ -183,8 +175,6 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       showToast,
       copyText,
       cookieInput,
-      parsedMap,
-      cookieCount,
       profiles,
       reloadProfiles,
       selectedBrowser,

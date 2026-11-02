@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import type { Profile } from '@/types';
 import { useApp } from '@/components/AppShell';
 import { maskName } from '@/lib/mask';
-import { CookieInputDeck, splitCookieBlocks } from '@/components/CookieInputDeck';
+import { AddAccountModal } from '@/components/AddAccountModal';
 import { ProfilesTab } from '@/components/tabs/ProfilesTab';
 
 export function AccountsList() {
@@ -12,8 +12,6 @@ export function AccountsList() {
     showToast,
     cookieInput,
     setCookieInput,
-    parsedMap,
-    cookieCount,
     profiles,
     reloadProfiles,
     selectedBrowser,
@@ -23,8 +21,7 @@ export function AccountsList() {
     maskEmails,
   } = useApp();
 
-  const [isLaunching, setIsLaunching] = useState(false);
-  const [launchStatus, setLaunchStatus] = useState('Tự động nạp Cookie vào Chrome/Edge');
+  const [addOpen, setAddOpen] = useState(false);
   const [launchingProfileId, setLaunchingProfileId] = useState<string | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [testingProfileId, setTestingProfileId] = useState<string | null>(null);
@@ -85,6 +82,7 @@ export function AccountsList() {
           if (s.status === 'captured') {
             stopCapturePolling();
             setCapturingProfileId(null);
+            setAddOpen(false);
             showToast(
               s.deduped
                 ? 'Đã cập nhật session — cookies mới nhất'
@@ -110,58 +108,6 @@ export function AccountsList() {
       setCapturingProfileId(null);
       showToast(e?.message || 'Không khởi động được phiên đăng nhập', 'error');
     }
-  };
-
-  const handlePasteClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setCookieInput(text);
-        showToast('Đã dán từ clipboard', 'success');
-      } else {
-        showToast('Clipboard trống', 'error');
-      }
-    } catch {
-      showToast('Vui lòng cấp quyền clipboard hoặc bấm Ctrl+V', 'error');
-    }
-  };
-
-  const handleLoadSample = () => {
-    if (profiles.length > 0) {
-      setCookieInput(profiles[0].cookies);
-      showToast(`Đã nạp: ${maskName(profiles[0].name, maskEmails)}`, 'success');
-    } else {
-      showToast('Chưa có session mẫu', 'error');
-    }
-  };
-
-  const handleClear = () => {
-    setCookieInput('');
-    showToast('Đã xóa dữ liệu', 'info');
-  };
-
-  const handleLaunchBrowser = async () => {
-    const raw = cookieInput.trim();
-    if (!raw) {
-      showToast('Vui lòng dán cookie trước khi mở trình duyệt', 'error');
-      return;
-    }
-
-    setIsLaunching(true);
-    setLaunchStatus('Đang mở trình duyệt & nạp session...');
-
-    const res = await launchBrowser(splitCookieBlocks(raw)[0] || raw);
-    if (res.ok) {
-      showToast(`Đã mở thành công trên ${selectedBrowser === 'chrome' ? 'Chrome' : 'Edge'}`, 'success');
-      setLaunchStatus('Đã mở thành công. Muse sẵn sàng.');
-    } else {
-      showToast(res.error || 'Lỗi khởi chạy trình duyệt', 'error');
-      setLaunchStatus('Tự động nạp Cookie vào Chrome/Edge');
-    }
-    setTimeout(() => {
-      setIsLaunching(false);
-      setLaunchStatus(`Tự động nạp Cookie vào ${selectedBrowser === 'chrome' ? 'Google Chrome' : 'Microsoft Edge'}`);
-    }, 3000);
   };
 
   /** Save every cookie block, then sequentially liveness-test each new account. */
@@ -194,6 +140,7 @@ export function AccountsList() {
         return;
       }
       setCookieInput('');
+      setAddOpen(false);
       showToast(`Đã thêm ${added} tài khoản${dupes ? ` · bỏ qua ${dupes} trùng` : ''} — đang kiểm tra session…`, 'success');
       reloadProfiles();
 
@@ -297,11 +244,6 @@ export function AccountsList() {
     }
   };
 
-  const handleUseProfile = (profile: Profile) => {
-    setCookieInput(profile.cookies);
-    showToast(`Đã nạp hồ sơ: "${maskName(profile.name, maskEmails)}"`, 'success');
-  };
-
   const handleLaunchProfile = async (profile: Profile) => {
     setLaunchingProfileId(profile.id);
     const res = await launchBrowser(profile.cookies);
@@ -314,43 +256,35 @@ export function AccountsList() {
   };
 
   return (
-    <div className="accounts-stack">
-      <CookieInputDeck
+    <>
+      <ProfilesTab
+        profiles={profiles}
+        onRefresh={reloadProfiles}
+        onAdd={() => setAddOpen(true)}
+        onDeleteProfile={handleDeleteProfile}
+        onLaunchProfile={handleLaunchProfile}
+        launchingProfileId={launchingProfileId}
+        onTestProfile={handleTestProfile}
+        testingProfileId={testingProfileId}
+        onTestAll={handleTestAll}
+        onRenameProfile={handleRenameProfile}
+        onRelogin={(p) => handleLoginCapture(p.id, p.name)}
+        capturingProfileId={capturingProfileId}
+        onToast={showToast}
+      />
+      <AddAccountModal
+        isOpen={addOpen}
+        onClose={() => setAddOpen(false)}
         cookieInput={cookieInput}
         onCookieChange={setCookieInput}
-        parsedMap={parsedMap}
-        cookieCount={cookieCount}
-        selectedBrowser={selectedBrowser}
-        onBrowserChange={setSelectedBrowser}
-        isLaunching={isLaunching}
-        launchStatus={launchStatus}
-        onLaunch={handleLaunchBrowser}
-        onPasteClipboard={handlePasteClipboard}
-        onLoadSample={handleLoadSample}
-        onClear={handleClear}
         onAddAccounts={handleAddAccounts}
         isAdding={isAdding}
+        selectedBrowser={selectedBrowser}
+        onBrowserChange={setSelectedBrowser}
         onLoginCapture={() => handleLoginCapture()}
-        isCapturing={isCapturing}
+        isCapturing={isCapturing && !capturingProfileId}
         captureStatus={captureStatus}
       />
-      <section className="apple-card">
-        <ProfilesTab
-          profiles={profiles}
-          onRefresh={reloadProfiles}
-          onUseProfile={handleUseProfile}
-          onDeleteProfile={handleDeleteProfile}
-          onLaunchProfile={handleLaunchProfile}
-          launchingProfileId={launchingProfileId}
-          onTestProfile={handleTestProfile}
-          testingProfileId={testingProfileId}
-          onTestAll={handleTestAll}
-          onRenameProfile={handleRenameProfile}
-          onRelogin={(p) => handleLoginCapture(p.id, p.name)}
-          capturingProfileId={capturingProfileId}
-          onToast={showToast}
-        />
-      </section>
-    </div>
+    </>
   );
 }
