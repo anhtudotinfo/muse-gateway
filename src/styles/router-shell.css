@@ -526,3 +526,15 @@
 .sidebar-license.warn { color: #fbbf24; }
 .sidebar-license.warn .sidebar-license-dot { background: #fbbf24; }
 .sidebar-license.active { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.page-header-actions:empty {
+  display: none;
+}

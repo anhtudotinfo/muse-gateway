@@ -204,11 +204,14 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       <div className="router-shell">
         <Sidebar profileCount={profiles.length} update={update} />
         <main className="router-main">
-          <header className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <header className="page-header" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div>
               <h1>{t(meta.title)}</h1>
               <p>{t(meta.subtitle)}</p>
             </div>
+            <div className="page-header-actions">
+            {/* Pages render their own header controls here (see usePageHeaderSlot). */}
+            <div id="page-header-slot" className="page-header-actions" />
             <button
               type="button"
               className="icon-btn"
@@ -226,6 +229,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 )}
               </svg>
             </button>
+            </div>
           </header>
           <UpdateBanner info={update} />
           {children}
