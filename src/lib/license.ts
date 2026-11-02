@@ -73,19 +73,36 @@ function loadPrivateKey(): crypto.KeyObject | null {
   }
 }
 
-/** Stable machine fingerprint: hostname + CPU + memory + first real MAC. */
-export function computeHwid(): string {
-  let mac = '';
-  for (const list of Object.values(os.networkInterfaces())) {
-    const found = (list || []).find((n) => !n.internal && n.mac && n.mac !== '00:00:00:00:00:00');
-    if (found) {
-      mac = found.mac;
-      break;
-    }
-  }
+// Virtual adapters (WSL/Hyper-V, Docker, VMs, VPNs) come and go and can be
+// listed before the real NIC, which used to change the machine ID under a
+// running license. The first ID uses the first physical adapter; the old
+// first-adapter ID stays accepted so keys activated under it keep working.
+const VIRTUAL_ADAPTER =
+  /vethernet|wsl|hyper-v|virtual|vmware|vbox|docker|tailscale|zerotier|wireguard|vpn|tap-|tunnel|bluetooth|npcap|loopback/i;
+const VIRTUAL_MAC = /^(00:15:5d|00:05:69|00:0c:29|00:1c:14|00:50:56|08:00:27|0a:00:27|02:42:|00:1c:42|00:03:ff)/i;
+
+function hwidFromMac(mac: string): string {
   const raw = [os.hostname(), os.cpus()[0]?.model || '', String(os.totalmem()), mac].join('|');
   const h = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
   return `${h.slice(0, 5)}-${h.slice(5, 10)}-${h.slice(10, 15)}`;
+}
+
+/** This machine's IDs, preferred first: [physical-adapter ID, legacy ID]. */
+function machineIds(): string[] {
+  let legacy = '';
+  let physical = '';
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    const nic = (list || []).find((n) => !n.internal && n.mac && n.mac !== '00:00:00:00:00:00');
+    if (!nic) continue;
+    legacy ||= nic.mac;
+    if (!physical && !VIRTUAL_ADAPTER.test(name) && !VIRTUAL_MAC.test(nic.mac)) physical = nic.mac;
+  }
+  return [...new Set([hwidFromMac(physical || legacy), hwidFromMac(legacy)])];
+}
+
+/** Machine fingerprint shown to the user and bound into new keys. */
+export function computeHwid(): string {
+  return machineIds()[0];
 }
 
 function maskMiddle(value: string, keep = 5): string {
@@ -155,7 +172,7 @@ export function checkKey(key: string): KeyCheck {
   if (expiresAtMs > 0 && expiresAtMs < Date.now()) return fail('License đã hết hạn');
 
   const hwidBound = String(p.h || '');
-  if (hwidBound && hwidBound !== computeHwid()) {
+  if (hwidBound && !machineIds().includes(hwidBound)) {
     return fail('Key gắn với máy khác — HWID không khớp');
   }
   return { ok: true, reason: 'Thành công!', email: String(p.e || ''), expiresAtMs, hwidBound };

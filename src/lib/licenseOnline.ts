@@ -42,18 +42,31 @@ interface OnlineVerdict {
   at: number; // fetchedAt ms
 }
 
-function hwid(): string {
-  let mac = '';
-  for (const list of Object.values(os.networkInterfaces())) {
-    const f = (list || []).find((n) => !n.internal && n.mac && n.mac !== '00:00:00:00:00:00');
-    if (f) {
-      mac = f.mac;
-      break;
-    }
-  }
+// Virtual adapters (WSL/Hyper-V, Docker, VMs, VPNs) come and go and can be
+// listed before the real NIC, which used to change the machine ID under a
+// running license. The first ID uses the first physical adapter; the old
+// first-adapter ID stays accepted so keys activated under it keep working.
+const VIRTUAL_ADAPTER =
+  /vethernet|wsl|hyper-v|virtual|vmware|vbox|docker|tailscale|zerotier|wireguard|vpn|tap-|tunnel|bluetooth|npcap|loopback/i;
+const VIRTUAL_MAC = /^(00:15:5d|00:05:69|00:0c:29|00:1c:14|00:50:56|08:00:27|0a:00:27|02:42:|00:1c:42|00:03:ff)/i;
+
+function hwidFromMac(mac: string): string {
   const raw = [os.hostname(), os.cpus()[0]?.model || '', String(os.totalmem()), mac].join('|');
   const h = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
   return `${h.slice(0, 5)}-${h.slice(5, 10)}-${h.slice(10, 15)}`;
+}
+
+/** This machine's IDs, preferred first: [physical-adapter ID, legacy ID]. */
+function machineIds(): string[] {
+  let legacy = '';
+  let physical = '';
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    const nic = (list || []).find((n) => !n.internal && n.mac && n.mac !== '00:00:00:00:00:00');
+    if (!nic) continue;
+    legacy ||= nic.mac;
+    if (!physical && !VIRTUAL_ADAPTER.test(name) && !VIRTUAL_MAC.test(nic.mac)) physical = nic.mac;
+  }
+  return [...new Set([hwidFromMac(physical || legacy), hwidFromMac(legacy)])];
 }
 
 function readLic(): any {
@@ -94,30 +107,43 @@ export function onlineOk(licenseKey: string): { ok: boolean; reason: string } {
   const kid = crypto.createHash('sha256').update(sigPart).digest('hex').slice(0, 16);
   if (v.kid !== kid) return { ok: false, reason: 'verdict_key_mismatch' };
   // …and to THIS machine when the verdict carries a bound HWID.
-  if (v.h && String(v.h) !== hwid()) return { ok: false, reason: 'verdict_hwid_mismatch' };
+  if (v.h && !machineIds().includes(String(v.h))) return { ok: false, reason: 'verdict_hwid_mismatch' };
   return { ok: true, reason: 'ok' };
 }
 
-async function fetchVerdict(action: 'activate' | 'verify', key: string): Promise<{ ok: boolean; reason: string }> {
+/** Denials that may only mean "not this ID" — the next candidate gets a try. */
+const HWID_DENIALS = new Set(['hwid_not_bound', 'hwid_mismatch']);
+
+async function fetchVerdict(
+  action: 'activate' | 'verify',
+  key: string,
+  hwids: string[] = machineIds(),
+): Promise<{ ok: boolean; reason: string }> {
   const base = onlineServer();
   if (!base) return { ok: true, reason: 'online_disabled' };
   try {
-    const nonce = crypto.randomBytes(12).toString('base64url');
-    const res = await fetch(`${base}/${action}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key, hwid: hwid(), nonce }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const body: any = await res.json().catch(() => null);
-    // 'key_not_activated' can be a KV propagation artifact: a /verify landing
-    // on a different POP within seconds of /activate misses the fresh record.
-    // Never let it overwrite a still-valid ok verdict — real revocations
-    // (revoked/deleted/expired) carry distinct reasons and still overwrite.
-    const lagDeny = body?.ok === false && body?.reason === 'key_not_activated' && onlineOk(key).ok;
-    if (body?.v && body?.s && !lagDeny) writeOnline(body.v, body.s); // store signed verdicts AND denials
-    if (!body?.ok) return { ok: false, reason: String(body?.reason || `http_${res.status}`) };
-    return { ok: true, reason: 'ok' };
+    for (const [index, hwid] of hwids.entries()) {
+      const nonce = crypto.randomBytes(12).toString('base64url');
+      const res = await fetch(`${base}/${action}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key, hwid, nonce }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const body: any = await res.json().catch(() => null);
+      // Another of this machine's IDs may be the bound one — only the last
+      // candidate's denial is stored, so a near miss can't evict a good verdict.
+      if (!body?.ok && HWID_DENIALS.has(body?.reason) && index < hwids.length - 1) continue;
+      // 'key_not_activated' can be a KV propagation artifact: a /verify landing
+      // on a different POP within seconds of /activate misses the fresh record.
+      // Never let it overwrite a still-valid ok verdict — real revocations
+      // (revoked/deleted/expired) carry distinct reasons and still overwrite.
+      const lagDeny = body?.ok === false && body?.reason === 'key_not_activated' && onlineOk(key).ok;
+      if (body?.v && body?.s && !lagDeny) writeOnline(body.v, body.s); // store signed verdicts AND denials
+      if (!body?.ok) return { ok: false, reason: String(body?.reason || `http_${res.status}`) };
+      return { ok: true, reason: 'ok' };
+    }
+    return { ok: false, reason: 'no_machine_id' };
   } catch (e: any) {
     return { ok: false, reason: `server_unreachable: ${e?.message || e}` };
   }
@@ -125,7 +151,11 @@ async function fetchVerdict(action: 'activate' | 'verify', key: string): Promise
 
 /** Called by /api/license right after a local activate — binds HWID server-side. */
 export async function activateOnline(licenseKey: string) {
-  return fetchVerdict('activate', licenseKey);
+  // A machine already bound under any of its IDs needs no new binding —
+  // activating first would spend one of the key's machine slots.
+  const known = await fetchVerdict('verify', licenseKey);
+  if (known.ok) return known;
+  return fetchVerdict('activate', licenseKey, [machineIds()[0]]);
 }
 
 /** Periodic re-verify — keeps the cached verdict fresh while the app runs. */
