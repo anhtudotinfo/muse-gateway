@@ -702,6 +702,11 @@ const DICT: Record<string, DictEntry> = {
   "Request": { vi: "Request", en: "Requests" },
   "Token": { vi: "Token", en: "Tokens" },
   "Log": { vi: "Log", en: "Log" },
+  "Quản lý": { en: "Manage" },
+  "Cooldown {n} phút": { en: "Cooldown {n} min" },
+  "Đang gửi": { en: "Busy" },
+  "Nhận request": { en: "Taking requests" },
+  "+{n} tài khoản khác": { en: "+{n} more accounts" },
 };
 
 export function tr(lang: Lang, key: string, vars?: Record<string, string | number>): string {

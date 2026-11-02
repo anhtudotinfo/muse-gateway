@@ -9,6 +9,7 @@ import { useT } from '@/lib/i18n';
 import { useApp } from '@/components/AppShell';
 import { HeaderSlot } from '@/components/HeaderSlot';
 import { maskName } from '@/lib/mask';
+import type { PoolAccountView } from '@/lib/musePool';
 import { MediaPreview, isVideo, localMediaUrl, type DashboardTask } from '@/components/tabs/MediaTab';
 
 interface OverviewData {
@@ -47,6 +48,7 @@ export function OverviewTab() {
   const [ov, setOv] = useState<OverviewData | null>(null);
   const [totals, setTotals] = useState<UsageTotals | null>(null);
   const [media, setMedia] = useState<{ total: number; days: number[] } | null>(null);
+  const [poolAccounts, setPoolAccounts] = useState<PoolAccountView[] | null>(null);
   const [recentTasks, setRecentTasks] = useState<DashboardTask[]>([]);
   const [origin, setOrigin] = useState('');
   const [showGuide, setShowGuide] = useState(false);
@@ -74,12 +76,14 @@ export function OverviewTab() {
 
   const refresh = useCallback(async () => {
     try {
-      const [o, u, tk] = await Promise.all([
+      const [o, u, tk, pl] = await Promise.all([
         fetch('/api/overview').then((r) => r.json()),
         fetch('/api/usage?range=all').then((r) => r.json()),
         fetch('/api/tasks?limit=40', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({})),
+        fetch('/api/pool').then((r) => r.json()).catch(() => ({})),
       ]);
       setRecentTasks(Array.isArray(tk.tasks) ? tk.tasks : []);
+      setPoolAccounts(Array.isArray(pl.accounts) ? pl.accounts : []);
       setOv(o);
       setTotals(u.totals || null);
       setMedia({
@@ -305,6 +309,7 @@ export function OverviewTab() {
           )}
         </section>
 
+        <div className="ov2-side">
         <section className="ov2-card ov2-chart" aria-label={t('Request 7 ngày')}>
           <div className="ov2-section-head">
             <h2>{t('Request 7 ngày')}</h2>
@@ -334,6 +339,45 @@ export function OverviewTab() {
             <b>{weekReq ? duration(weekMs / weekReq) : '—'}</b>
           </div>
         </section>
+
+        {/* Per-account health — which account is serving, busy or resting */}
+        <section className="ov2-card ov2-accounts" aria-label={t('Tài khoản')}>
+          <div className="ov2-section-head">
+            <h2>{t('Tài khoản')}</h2>
+            <Link href="/accounts" className="ov2-link">{t('Quản lý')} →</Link>
+          </div>
+          {!poolAccounts ? (
+            <div className="skeleton" style={{ height: 72 }} />
+          ) : poolAccounts.length ? (
+            <ul className="ov2-acc-list">
+              {poolAccounts.slice(0, 5).map((a) => {
+                const state = !a.enabled
+                  ? { cls: 'idle', label: t('Tắt') }
+                  : a.cooldownRemainingMs > 0
+                    ? { cls: 'bad', label: t('Cooldown {n} phút', { n: Math.ceil(a.cooldownRemainingMs / 60000) }) }
+                    : a.status === 'busy'
+                      ? { cls: 'busy', label: t('Đang gửi') }
+                      : { cls: 'ok', label: t('Nhận request') };
+                return (
+                  <li key={a.id} className="ov2-acc-row">
+                    <span className={`ov2-acc-dot ${state.cls}`} aria-hidden="true" />
+                    <span className="ov2-acc-name">{maskName(a.name, maskEmails)}</span>
+                    <span className={`ov2-acc-state ${state.cls}`}>{state.label}</span>
+                    <span className="ov2-dim">{t('{n} request', { n: a.totalRequests })}</span>
+                  </li>
+                );
+              })}
+              {poolAccounts.length > 5 && (
+                <li className="ov2-dim">{t('+{n} tài khoản khác', { n: poolAccounts.length - 5 })}</li>
+              )}
+            </ul>
+          ) : (
+            <div className="ov2-empty" style={{ padding: '16px 0' }}>
+              <Link href="/accounts" className="ov2-link">{t('Thêm tài khoản Muse')} →</Link>
+            </div>
+          )}
+        </section>
+        </div>
       </div>
 
       {/* Recent requests as a table: one row, one request */}

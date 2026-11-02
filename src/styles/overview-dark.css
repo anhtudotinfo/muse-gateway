@@ -721,3 +721,44 @@
 }
 @keyframes acc2-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .acc2-spinner { animation: none; } }
+
+/* Right column: 7-day chart + account health, stacked */
+.ov2-side {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+.ov2-accounts { padding: 18px 20px; }
+.ov2-acc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ov2-acc-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--apple-border);
+  font-size: 0.8rem;
+}
+.ov2-acc-row:first-child { border-top: none; padding-top: 0; }
+.ov2-acc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
+.ov2-acc-dot.ok { background: var(--apple-green); }
+.ov2-acc-dot.busy { background: #67e8f9; }
+.ov2-acc-dot.bad { background: var(--apple-red); }
+.ov2-acc-name {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov2-acc-state { font-weight: 500; color: var(--text-tertiary); }
+.ov2-acc-state.ok { color: var(--apple-green); }
+.ov2-acc-state.busy { color: #67e8f9; }
+.ov2-acc-state.bad { color: var(--apple-red); }
