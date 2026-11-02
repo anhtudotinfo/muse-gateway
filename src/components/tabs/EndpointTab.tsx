@@ -5,14 +5,15 @@
 // /api/health, and /api/tunnel/* (cloudflared quick tunnel + Tailscale funnel).
 // Per-key "Restrict access" is persisted on the key record and enforced by
 // the /v1/* handlers (403 on a disallowed model).
+// Layout (Connect page): quick start → endpoint rows → API key table, styled
+// with the acc2-/ov2- house classes + connect.css (con-). Modals still use the
+// .ep9r UI kit, so the page root keeps the ep9r class.
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Card from '@/components/endpoint/ui/Card';
 import Button from '@/components/endpoint/ui/Button';
 import Input from '@/components/endpoint/ui/Input';
 import Modal, { ConfirmModal } from '@/components/endpoint/ui/Modal';
-import Toggle from '@/components/endpoint/ui/Toggle';
-import { CardSkeleton } from '@/components/endpoint/ui/Loading';
+import { HeaderSlot } from '@/components/HeaderSlot';
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard';
 import {
   TUNNEL_BENEFITS,
@@ -24,10 +25,7 @@ import {
   UNREACHABLE_FAIL_MS,
 } from '@/components/endpoint/endpointConstants';
 import { clientPingUrl, clientPingAny } from '@/components/endpoint/endpointPing';
-import EndpointRow from '@/components/endpoint/EndpointRow';
 import StatusAlert, { type StatusAlertStatus } from '@/components/endpoint/StatusAlert';
-import HelpTooltip from '@/components/endpoint/HelpTooltip';
-import SecurityWarning from '@/components/endpoint/SecurityWarning';
 import KeyAccessControls from '@/components/endpoint/KeyAccessControls';
 import KeySnippetModal from '@/components/endpoint/KeySnippetModal';
 import ApiDocsModal from '@/components/endpoint/ApiDocsModal';
@@ -63,11 +61,10 @@ const patchSettings = async (patch: Record<string, unknown>) => {
 
 interface EndpointTabProps {
   onCopyText?: (text: string, label: string) => void;
-  onOpenSettings?: () => void;
 }
 
-export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
-  const { t } = useT();
+export function EndpointTab({ onCopyText }: EndpointTabProps) {
+  const { t, lang } = useT();
   const [keys, setKeys] = useState<EndpointKey[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -134,6 +131,8 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
   // Lazily fetched full key values (list endpoint returns masked keys)
   const [revealedKeys, setRevealedKeys] = useState<Record<string, string>>({});
+  // Key row whose "more" panel (access rules, pause, delete) is open
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
   // Per-key access rules live on the key record server-side (enforced by /v1/*)
 
   // Client-side local/remote detection (UI hint only, not a security gate)
@@ -823,6 +822,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
               delete next[id];
               return next;
             });
+            setExpandedKey(prev => (prev === id ? null : prev));
             // access rules are stored on the key server-side — nothing to clean up
           }
         } catch (error) {
@@ -915,11 +915,50 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     }
   }, []);
 
+  // Remote enable buttons run the same security gates every time (the old
+  // error-state "Enable" skipped them).
+  const requestEnableTunnel = () => {
+    if (isLoginUnsafe) {
+      setTunnelStatus({ type: 'error', message: `Security required: ${unsafeReason}` });
+      return;
+    }
+    if (!requireApiKey) {
+      setTunnelStatus({ type: 'error', message: 'Security required: Enable "Require API key" before activating the tunnel.' });
+      return;
+    }
+    setTunnelStatus(null);
+    setShowEnableTunnelModal(true);
+  };
+
+  const requestEnableTailscale = () => {
+    if (isLoginUnsafe) {
+      setTsStatus({ type: 'error', message: `Security required: ${unsafeReason}` });
+      return;
+    }
+    handleOpenTsModal();
+  };
+
+  const requestToggleKey = (key: EndpointKey) => {
+    if (!key.isActive) {
+      handleToggleKey(key.id, true);
+      return;
+    }
+    setConfirmState({
+      title: 'Pause API Key',
+      message: `Pause API key "${key.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        handleToggleKey(key.id, false);
+      }
+    });
+  };
+
   if (loading) {
     return (
-      <div className="ep9r flex flex-col gap-8">
-        <CardSkeleton />
-        <CardSkeleton />
+      <div className="ep9r con-page" aria-busy="true">
+        <div className="ov2-card con-skel" />
+        <div className="ov2-card con-skel" />
+        <div className="ov2-card con-skel" />
       </div>
     );
   }
@@ -934,446 +973,359 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     ...(tsEnabled && tsUrl ? [{ label: 'Tailscale', url: v1(tsUrl) }] : []),
   ];
 
+  // Quick start: the curl example only ever shows a short masked key; the copy
+  // button fetches the full key and puts the runnable command on the clipboard.
+  const quickKey = keys.find((k) => k.isActive);
+  const curlShown = [
+    `curl ${currentEndpoint}/chat/completions \\`,
+    `  -H "Authorization: Bearer ${quickKey ? maskShort(quickKey.key) : 'sk-muse-…'}" \\`,
+    `  -d '{"model":"muse-chat","messages":[…]}'`,
+  ].join('\n');
+  const copyCurl = async () => {
+    let full = '$MUSE_API_KEY';
+    if (quickKey) {
+      try { full = await revealKey(quickKey.id); } catch { /* keep placeholder */ }
+    }
+    const cmd = [
+      `curl ${currentEndpoint}/chat/completions \\`,
+      `  -H "Authorization: Bearer ${full}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '{"model":"muse-chat","messages":[{"role":"user","content":"Hello"}]}'`,
+    ].join('\n');
+    copyWithToast(cmd, 'quick_curl', 'curl');
+  };
+
+  // ─── Endpoint rows: one view model per remote, in the old state precedence
+  const tunnelBase = tunnelPublicUrl || tunnelUrl;
+  const statusNote = (s: StatusAlertStatus | null) =>
+    s && (s.type === 'error' || s.type === 'warning')
+      ? <p className={`con-ep-note ${s.type === 'error' ? 'bad' : 'warn'}`} role="alert">{s.message}</p>
+      : null;
+
+  const cf: RowView = tunnelLoading
+    ? {
+        state: tunnelProgress || 'Creating tunnel...', tone: 'muted', busy: true,
+        placeholder: t('Đang tạo tunnel…'),
+        action: <button type="button" className="acc2-btn" onClick={() => { setTunnelLoading(false); setTunnelProgress(''); }}>{t('Dừng')}</button>,
+      }
+    : tunnelEnabled
+      ? {
+          state: tunnelReachable ? t('Đang bật') : tunnelTimedOut ? t('Không kết nối được') : tunnelEverReachable ? t('Đang kết nối lại…') : t('Đang kiểm tra…'),
+          tone: tunnelReachable ? 'ok' : tunnelTimedOut ? 'bad' : 'warn',
+          busy: !tunnelReachable && !tunnelTimedOut,
+          url: tunnelBase ? v1(tunnelBase) : undefined,
+          placeholder: t('Tunnel bật nhưng thiếu public URL'),
+          action: <button type="button" className="acc2-btn" onClick={() => setShowDisableTunnelModal(true)}>{t('Tắt')}</button>,
+          note: tunnelTimedOut ? (
+            <p className="con-ep-note bad" role="alert">
+              {tunnelBase ? t('Không kết nối được {url}', { url: tunnelBase }) : t('Tunnel bật nhưng thiếu public URL')}
+              {t(' — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…')}
+            </p>
+          ) : statusNote(tunnelStatus),
+        }
+      : tunnelChecking
+        ? {
+            state: t('Đang kiểm tra…'), tone: 'muted', busy: true,
+            placeholder: '—',
+            action: <button type="button" className="acc2-btn" onClick={() => setTunnelChecking(false)}>{t('Dừng')}</button>,
+          }
+        : {
+            state: t('Chưa bật'), tone: 'muted',
+            placeholder: t('Bật để lấy địa chỉ công khai'),
+            action: <button type="button" className="acc2-btn primary" onClick={requestEnableTunnel}>{t('Bật')}</button>,
+            note: statusNote(tunnelStatus),
+          };
+
+  const ts: RowView = (tsLoading || tsConnecting)
+    ? {
+        state: tsProgress || 'Connecting...', tone: 'muted', busy: true,
+        placeholder: t('Đang kết nối…'),
+        action: <button type="button" className="acc2-btn" onClick={() => { setTsLoading(false); setTsConnecting(false); setTsProgress(''); clearUserAuth(); }}>{t('Dừng')}</button>,
+        // Login / Funnel consent opens from a real click (popups after async work get blocked).
+        note: tsAuthUrl ? (
+          <div className="con-ep-note">
+            <button
+              type="button"
+              className="acc2-btn small primary"
+              onClick={() => window.open(tsAuthUrl, 'tailscale_auth', 'width=600,height=700,noopener,noreferrer')}
+            >
+              {tsAuthLabel || 'Open'}
+            </button>
+          </div>
+        ) : null,
+      }
+    : tsEnabled
+      ? {
+          state: tsReachable ? t('Đang bật') : tsTimedOut ? t('Không kết nối được') : tsEverReachable ? t('Đang kết nối lại…') : t('Đang kiểm tra…'),
+          tone: tsReachable ? 'ok' : tsTimedOut ? 'bad' : 'warn',
+          busy: !tsReachable && !tsTimedOut,
+          url: tsUrl ? v1(tsUrl) : undefined,
+          placeholder: t('Tailscale bật nhưng thiếu URL'),
+          action: <button type="button" className="acc2-btn" onClick={() => setShowDisableTsModal(true)}>{t('Tắt')}</button>,
+          note: tsTimedOut ? (
+            <p className="con-ep-note bad" role="alert">
+              {tsUrl ? t('Không kết nối được {url}', { url: tsUrl }) : t('Tailscale bật nhưng thiếu URL')}
+              {t(' — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…')}
+            </p>
+          ) : statusNote(tsStatus),
+        }
+      : {
+          state: t('Chưa bật'), tone: 'muted',
+          placeholder: t('Bật để lấy địa chỉ *.ts.net qua Tailscale Funnel'),
+          action: <button type="button" className="acc2-btn primary" onClick={requestEnableTailscale}>{t('Bật')}</button>,
+          note: statusNote(tsStatus),
+        };
+
+  const anyRemote = tunnelEnabled || tsEnabled;
+  const dashBase = (tunnelEnabled && tunnelPublicUrl) || (tsEnabled && tsUrl) || '';
+  const unlockLink = tunnelDashboardAccess && dashboardToken && dashBase
+    ? `${dashBase.replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`
+    : '';
+
+  const restrictionLabel = (key: EndpointKey) => {
+    const access = key.access;
+    if (!access?.restricted) return t('Mọi model');
+    if (access.allow.length === 0) return t('Chặn mọi model');
+    return access.allow.length <= 2 ? access.allow.join(', ') : t('{n} model', { n: access.allow.length });
+  };
+  const dateLocale = lang === 'en' ? 'en-GB' : lang;
+
   return (
-    <div className="ep9r flex flex-col gap-8">
-      {/* Endpoint Card */}
-      <Card>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">api</span>
-            API Endpoint
-          </h2>
-          <Button variant="secondary" size="sm" icon="menu_book" onClick={() => setShowDocs(true)}>
-            {t('API Docs')}
-          </Button>
-        </div>
+    <div className="ep9r con-page">
+      <HeaderSlot>
+        <button type="button" className="acc2-btn" onClick={() => setShowDocs(true)}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5v14zM20 17v4H6.5" />
+          </svg>
+          {t('API Docs')}
+        </button>
+      </HeaderSlot>
 
-        {/* Endpoint rows */}
-        <div className="flex flex-col gap-2">
-          {/* Local */}
-          <EndpointRow
-            label="Local"
-            url={currentEndpoint}
-            copyId="local_url"
-            copied={copied}
-            onCopy={copyWithToast}
-          />
-          {/* Cloudflare Tunnel */}
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
-              tunnelEnabled ? 'bg-primary/10 text-primary' : 'bg-surface-2 text-text-muted'
-            }`}>Tunnel</span>
-            {tunnelEnabled && !tunnelLoading && tunnelReachable ? (
-              <>
-                <Input value={`${tunnelPublicUrl || tunnelUrl}/v1`} readOnly className="flex-1 font-mono text-sm" />
-                <button
-                  onClick={() => copyWithToast(`${tunnelPublicUrl || tunnelUrl}/v1`, 'tunnel_url')}
-                  className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
-                >
-                  <span className="material-symbols-outlined text-[18px]">{copied === 'tunnel_url' ? 'check' : 'content_copy'}</span>
-                </button>
-                <button
-                  onClick={() => setShowDisableTunnelModal(true)}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Disable Tunnel"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : tunnelEnabled && !tunnelLoading && !tunnelReachable ? (
-              <>
-                <div className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded border text-sm ${
-                  tunnelTimedOut
-                    ? 'border-red-300 dark:border-red-800 bg-red-500/5 text-red-600 dark:text-red-400'
-                    : 'border-amber-300 dark:border-amber-800 bg-amber-500/5 text-amber-600 dark:text-amber-400'
-                }`}>
-                  {tunnelTimedOut ? (
-                    <>
-                      <span className="material-symbols-outlined text-sm">error</span>
-                      <span className="min-w-0">
-                        {tunnelPublicUrl || tunnelUrl
-                          ? t('Không kết nối được {url}', { url: tunnelPublicUrl || tunnelUrl })
-                          : t('Tunnel bật nhưng thiếu public URL')}
-                        <span className="opacity-70">{t(' — kiểm tra token khớp đúng tunnel + hostname route. Đang thử lại…')}</span>
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                      {tunnelEverReachable ? 'Tunnel reconnecting...' : 'Tunnel checking...'}
-                    </>
-                  )}
-                </div>
-                <button
-                  onClick={() => setShowDisableTunnelModal(true)}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Disable Tunnel"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : tunnelLoading ? (
-              <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  {tunnelProgress || 'Creating tunnel...'}
-                </div>
-                <button
-                  onClick={() => { setTunnelLoading(false); setTunnelProgress(''); }}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Stop"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : tunnelStatus?.type === 'error' ? (
-              <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
-                  <span className="material-symbols-outlined text-sm">error</span>
-                  {tunnelStatus.message}
-                </div>
-                <Button size="sm" icon="cloud_upload" onClick={() => setShowEnableTunnelModal(true)}>Enable</Button>
-              </>
-            ) : tunnelChecking ? (
-              <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  Checking...
-                </div>
-                <button
-                  onClick={() => setTunnelChecking(false)}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Stop"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                icon="cloud_upload"
-                onClick={() => {
-                  if (isLoginUnsafe) {
-                    setTunnelStatus({ type: 'error', message: `Security required: ${unsafeReason}` });
-                    return;
-                  }
-                  if (!requireApiKey) {
-                    setTunnelStatus({ type: 'error', message: 'Security required: Enable "Require API key" before activating the tunnel.' });
-                    return;
-                  }
-                  setShowEnableTunnelModal(true);
-                }}
-              >
-                Enable
-              </Button>
-            )}
-          </div>
-          {/* Tailscale */}
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-mono px-1.5 py-0.5 rounded shrink-0 min-w-[88px] text-center ${
-              tsEnabled ? 'bg-primary/10 text-primary' : 'bg-surface-2 text-text-muted'
-            }`}>Tailscale</span>
-            {tsEnabled && !tsLoading && tsReachable ? (
-              <>
-                <Input value={`${tsUrl}/v1`} readOnly className="flex-1 font-mono text-sm" />
-                <button
-                  onClick={() => copyWithToast(`${tsUrl}/v1`, 'ts_url')}
-                  className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-colors shrink-0"
-                >
-                  <span className="material-symbols-outlined text-[18px]">{copied === 'ts_url' ? 'check' : 'content_copy'}</span>
-                </button>
-                <button
-                  onClick={() => setShowDisableTsModal(true)}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Disable Tailscale"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : tsEnabled && !tsLoading && !tsReachable ? (
-              <>
-                <div className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded border text-sm ${
-                  tsTimedOut
-                    ? 'border-red-300 dark:border-red-800 bg-red-500/5 text-red-600 dark:text-red-400'
-                    : 'border-amber-300 dark:border-amber-800 bg-amber-500/5 text-amber-600 dark:text-amber-400'
-                }`}>
-                  {tsTimedOut ? (
-                    <>
-                      <span className="material-symbols-outlined text-sm">error</span>
-                      <span className="min-w-0">
-                        {tsUrl ? t('Không kết nối được {url}', { url: tsUrl }) : t('Tailscale bật nhưng thiếu URL')}
-                        <span className="opacity-70">{t(' — kiểm tra tailscaled/funnel đang chạy. Đang thử lại…')}</span>
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                      {tsEverReachable ? 'Tailscale reconnecting...' : 'Tailscale checking...'}
-                    </>
-                  )}
-                </div>
-                <button
-                  onClick={() => setShowDisableTsModal(true)}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Disable Tailscale"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : (tsLoading || tsConnecting) ? (
-              <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-border bg-input text-sm text-text-muted">
-                  <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-                  {tsProgress || 'Connecting...'}
-                </div>
-                {tsAuthUrl && (
-                  <Button
-                    size="sm"
-                    icon="open_in_new"
-                    onClick={() => window.open(tsAuthUrl, 'tailscale_auth', 'width=600,height=700,noopener,noreferrer')}
-                  >
-                    {tsAuthLabel || 'Open'}
-                  </Button>
-                )}
-                <button
-                  onClick={() => { setTsLoading(false); setTsConnecting(false); setTsProgress(''); clearUserAuth(); }}
-                  className="p-2 hover:bg-red-500/10 rounded text-red-500 transition-colors shrink-0"
-                  title="Stop"
-                >
-                  <span className="material-symbols-outlined text-[18px]">power_settings_new</span>
-                </button>
-              </>
-            ) : tsStatus?.type === 'error' ? (
-              <>
-                <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
-                  <span className="material-symbols-outlined text-sm">error</span>
-                  {tsStatus.message}
-                </div>
-                <Button size="sm" icon="vpn_lock" onClick={handleOpenTsModal}>Enable</Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                icon="vpn_lock"
-                onClick={() => {
-                  if (isLoginUnsafe) {
-                    setTsStatus({ type: 'error', message: `Security required: ${unsafeReason}` });
-                    return;
-                  }
-                  handleOpenTsModal();
-                }}
-                className="bg-linear-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white!"
-              >
-                Enable
-              </Button>
-            )}
+      {/* Quick start */}
+      <section className="ov2-card con-quick" aria-labelledby="con-quick-title">
+        <div className="con-quick-intro">
+          <h2 id="con-quick-title">{t('Bắt đầu nhanh')}</h2>
+          <p>{t('Dùng bất kỳ SDK OpenAI nào. Đổi base URL, dùng API key bên dưới, chọn một trong các model:')}</p>
+          <div className="con-chips">
+            <code className="con-chip">muse-chat</code>
+            <code className="con-chip">muse-image</code>
+            <code className="con-chip">muse-video</code>
+            <code className="con-chip dashed">{t('+ tên combo')}</code>
           </div>
         </div>
+        <div className="con-code-wrap">
+          <pre className="con-code">{curlShown}</pre>
+          <button type="button" className="acc2-icon-btn con-code-copy" onClick={copyCurl} aria-label={t('Sao chép lệnh curl')}>
+            {copied === 'quick_curl' ? <IconCheck /> : <IconCopy />}
+          </button>
+        </div>
+      </section>
 
-        {/* Pre-enable security gate banner */}
-        {isLoginUnsafe && !tunnelEnabled && !tsEnabled && (
-          <div className="mt-4">
-            <SecurityWarning
-              message={unsafeReason}
-              action={onOpenSettings ? { label: 'Open settings', onClick: onOpenSettings } : undefined}
-            />
+      {/* Endpoint addresses */}
+      <section className="acc2-card" aria-labelledby="con-ep-title">
+        <div className="con-card-head">
+          <div>
+            <h2 id="con-ep-title">{t('Địa chỉ endpoint')}</h2>
+            <p>{t('Bật tunnel hoặc Tailscale để gọi gateway từ máy khác.')}</p>
           </div>
-        )}
+        </div>
+        <ConnectRow
+          name={t('Máy này')}
+          view={{ state: t('Luôn bật'), tone: 'ok', url: currentEndpoint, placeholder: '', action: <span className="con-ep-default">{t('Mặc định')}</span> }}
+          copyId="local_url"
+          copied={copied}
+          onCopy={copyWithToast}
+        />
+        <ConnectRow name="Cloudflare tunnel" view={cf} copyId="tunnel_url" copied={copied} onCopy={copyWithToast} />
+        <ConnectRow name="Tailscale" view={ts} copyId="ts_url" copied={copied} onCopy={copyWithToast} />
 
-        {/* Security warnings when tunnel or tailscale is active */}
-        {(tunnelEnabled || tsEnabled) && (
-          <div className="mt-4 flex flex-col gap-2">
-            {(!requireApiKey || keys.every((k) => !k.isActive)) && (
-              <SecurityWarning
-                message={
-                  !requireApiKey
+        {/* Security gates: before enabling (login unsafe) and while a remote is live */}
+        {((isLoginUnsafe && !anyRemote) || (anyRemote && (!requireApiKey || keys.every((k) => !k.isActive) || isLoginUnsafe))) && (
+          <div className="con-warns">
+            {isLoginUnsafe && !anyRemote && (
+              <div className="con-warn" role="note"><p>{unsafeReason}</p></div>
+            )}
+            {anyRemote && (!requireApiKey || keys.every((k) => !k.isActive)) && (
+              <div className="con-warn" role="alert">
+                <p>
+                  {!requireApiKey
                     ? 'Require API key is disabled — your endpoint is publicly accessible without authentication.'
-                    : t('Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.')
-                }
-                action={{ label: !requireApiKey ? 'Enable' : 'Create key', href: '#require-api-key' }}
-              />
-            )}
-            {(!requireLogin || !hasPassword) && (
-              <SecurityWarning
-                message={
-                  !requireLogin
-                    ? 'Require login is disabled — anyone can access your dashboard via tunnel.'
-                    : 'Dashboard uses the default password — change it in Profile settings.'
-                }
-                action={
-                  onOpenSettings
-                    ? { label: !requireLogin ? 'Enable' : 'Change password', onClick: onOpenSettings }
-                    : undefined
-                }
-              />
-            )}
-          </div>
-        )}
-
-        {/* Tunnel dashboard access option */}
-        {(tunnelEnabled || tsEnabled) && (
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex items-center gap-3">
-              <Toggle
-                checked={tunnelDashboardAccess}
-                onChange={() => handleTunnelDashboardAccess(!tunnelDashboardAccess)}
-              />
-              <div className="flex items-center gap-1.5">
-                <p className="font-medium text-sm">Allow dashboard access via tunnel</p>
-                <HelpTooltip text={t('Dashboard chỉ mở từ xa bằng link mở khóa riêng (đặt cookie đăng nhập một lần). Ai không có link vẫn bị chặn — giữ link này bí mật như API key.')} />
-              </div>
-            </div>
-            {tunnelDashboardAccess && dashboardToken && (tunnelPublicUrl || tsUrl) && (
-              <div className="mt-2 ml-[52px] flex items-center gap-2">
-                <code className="text-xs bg-surface-2 border border-border rounded px-2 py-1 text-text-muted truncate max-w-[420px]">
-                  {`${(tunnelPublicUrl || tsUrl).replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`}
-                </code>
+                    : t('Chưa có API key nào đang bật — endpoint đang mở công khai. Tạo key trong mục API Keys bên dưới.')}
+                </p>
                 <button
                   type="button"
-                  className="text-xs text-primary hover:underline shrink-0"
-                  onClick={() => copyWithToast(`${(tunnelPublicUrl || tsUrl).replace(/\/v1\/?$/, '')}/?dgk=${dashboardToken}`, 'dgk', 'dashboard access link')}
+                  className="acc2-link"
+                  onClick={() => (!requireApiKey
+                    ? document.getElementById('require-api-key')?.scrollIntoView({ behavior: 'smooth' })
+                    : setShowAddModal(true))}
                 >
-                  {t('Copy link mở khóa')}
+                  {!requireApiKey ? t('Tới mục API key') : t('Tạo key')}
                 </button>
+              </div>
+            )}
+            {anyRemote && isLoginUnsafe && (
+              <div className="con-warn" role="alert">
+                <p>
+                  {!requireLogin
+                    ? 'Require login is disabled — anyone can access your dashboard via tunnel.'
+                    : 'Dashboard uses the default password — change it in Profile settings.'}
+                </p>
               </div>
             )}
           </div>
         )}
-      </Card>
 
-      {/* API Keys */}
-      <Card id="require-api-key">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary">vpn_key</span>
-            API Keys
-          </h2>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
-            Create Key
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
-          <div>
-            <p className="font-medium">Require API key</p>
-            <p className="text-sm text-text-muted">
-              Requests without a valid key will be rejected
-            </p>
-          </div>
-          <Toggle
-            checked={requireApiKey}
-            onChange={() => handleRequireApiKey(!requireApiKey)}
+        {/* Dashboard via tunnel */}
+        <div className="con-check-row">
+          <input
+            id="con-remote-dash"
+            type="checkbox"
+            checked={tunnelDashboardAccess}
+            onChange={(e) => handleTunnelDashboardAccess(e.target.checked)}
           />
+          <div className="con-check-body">
+            <label htmlFor="con-remote-dash">
+              {t('Cho mở dashboard qua tunnel')}
+              <span className="con-check-hint">{t('Chỉ mở được bằng link mở khoá riêng. Giữ link đó bí mật như API key.')}</span>
+            </label>
+            {unlockLink && (
+              <div className="con-unlock">
+                <code>{unlockLink}</code>
+                <button
+                  type="button"
+                  className="acc2-link"
+                  onClick={() => copyWithToast(unlockLink, 'dgk', 'dashboard access link')}
+                >
+                  {copied === 'dgk' ? t('Đã sao chép') : t('Copy link mở khóa')}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* API keys */}
+      <section className="acc2-card" id="require-api-key" aria-labelledby="con-keys-title">
+        <div className="con-card-head">
+          <div>
+            <h2 id="con-keys-title">API key</h2>
+            <label className="acc2-check con-require">
+              <input type="checkbox" checked={requireApiKey} onChange={(e) => handleRequireApiKey(e.target.checked)} />
+              {t('Bắt buộc có key — request thiếu key bị từ chối')}
+            </label>
+          </div>
+          <button type="button" className="acc2-btn primary" onClick={() => setShowAddModal(true)}>
+            {t('+ Tạo key')}
+          </button>
         </div>
 
         {isRemoteHost && !requireApiKey && (
-          <div className="mb-4 -mt-2">
-            <SecurityWarning message="Endpoint is exposed without an API key." />
-          </div>
+          <div className="con-warn con-warn-inset" role="alert"><p>{t('Endpoint đang mở mà không cần API key.')}</p></div>
         )}
 
         {keys.length === 0 ? (
-          <div className="text-center py-12">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">
-              <span className="material-symbols-outlined text-[32px]">vpn_key</span>
-            </div>
-            <p className="text-text-main font-medium mb-1">No API keys yet</p>
-            <p className="text-sm text-text-muted mb-4">Create your first API key to get started</p>
-            <Button icon="add" onClick={() => setShowAddModal(true)}>
-              Create Key
-            </Button>
+          <div className="acc2-empty">
+            <div className="acc2-empty-title">{t('Chưa có API key')}</div>
+            <p>{t('Tạo key đầu tiên để gọi gateway.')}</p>
+            <button type="button" className="acc2-btn primary" onClick={() => setShowAddModal(true)}>{t('+ Tạo key')}</button>
           </div>
         ) : (
-          <div className="flex flex-col">
-            {keys.map((key) => (
-              <div
-                key={key.id}
-                className={`group flex items-start justify-between gap-3 py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? 'opacity-60' : ''}`}
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium">{key.name}</p>
-                  <div className="flex items-center gap-2 mt-1 min-w-0 flex-wrap">
-                    <code className="text-xs text-text-muted font-mono break-all min-w-0">
-                      {visibleKeys.has(key.id) ? (revealedKeys[key.id] || key.key) : key.key}
-                    </code>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => toggleKeyVisibility(key.id)}
-                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                        title={visibleKeys.has(key.id) ? 'Hide key' : 'Show key'}
-                      >
-                        <span className="material-symbols-outlined text-[14px]">
-                          {visibleKeys.has(key.id) ? 'visibility_off' : 'visibility'}
-                        </span>
-                      </button>
-                      <button
-                        onClick={() => handleCopyKey(key)}
-                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">
-                          {copied === key.id ? 'check' : 'content_copy'}
-                        </span>
-                      </button>
-                      <button
-                        onClick={() => setSnippetKey(key)}
-                        className="p-1 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
-                        title="Client config — cURL/Python/Node snippet"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">code</span>
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-text-muted mt-1">
-                    Created {new Date(key.createdAt).toLocaleDateString()}
-                  </p>
-                  {key.isActive === false && (
-                    <p className="text-xs text-orange-500 mt-1">Paused</p>
-                  )}
-                  <KeyAccessControls
-                    apiKey={key}
-                    onChange={(access) => handleUpdateKeyAccess(key.id, access)}
-                    onRequestRestrict={() => setConfirmState({
-                      title: 'Restrict API Key',
-                      message: `Restrict API key "${key.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
-                      onConfirm: async () => {
-                        setConfirmState(null);
-                        handleUpdateKeyAccess(key.id, { restricted: true, allow: key.access?.allow || [] });
-                      }
-                    })}
-                  />
-                </div>
-                <div className="flex items-center gap-2 shrink-0 pt-0.5">
-                  <Toggle
-                    size="sm"
-                    checked={key.isActive ?? true}
-                    onChange={(checked) => {
-                      if (key.isActive && !checked) {
-                        setConfirmState({
-                          title: 'Pause API Key',
-                          message: `Pause API key "${key.name}"?\n\nThis key will stop working immediately but can be resumed later.`,
-                          onConfirm: async () => {
-                            setConfirmState(null);
-                            handleToggleKey(key.id, checked);
-                          }
-                        });
-                      } else {
-                        handleToggleKey(key.id, checked);
-                      }
-                    }}
-                    title={key.isActive ? 'Pause key' : 'Resume key'}
-                  />
-                  <button
-                    onClick={() => handleDeleteKey(key.id)}
-                    className="p-2 hover:bg-red-500/10 rounded text-red-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                  </button>
-                </div>
-              </div>
-            ))}
+          <div className="acc2-scroll">
+            <table className="acc2-table con-key-table">
+              <thead>
+                <tr>
+                  <th>{t('Tên')}</th>
+                  <th>Key</th>
+                  <th>{t('Giới hạn')}</th>
+                  <th>{t('Tạo ngày')}</th>
+                  <th><span className="sr-only">{t('Thao tác')}</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {keys.map((key) => {
+                  const shown = visibleKeys.has(key.id);
+                  const open = expandedKey === key.id;
+                  const restrictedNone = !!key.access?.restricted && key.access.allow.length === 0;
+                  return (
+                    <React.Fragment key={key.id}>
+                      <tr className={key.isActive ? undefined : 'con-key-paused'}>
+                        <td>
+                          <span className="con-key-name">
+                            <span className={`con-key-dot${key.isActive ? ' on' : ''}`} aria-hidden="true" />
+                            {key.name}
+                            {!key.isActive && <span className="acc2-pill">{t('Đã tạm dừng')}</span>}
+                          </span>
+                        </td>
+                        <td><code className="con-key-value">{shown ? (revealedKeys[key.id] || key.key) : key.key}</code></td>
+                        <td className={restrictedNone ? 'con-restrict-none' : 'con-dim'}>{restrictionLabel(key)}</td>
+                        <td className="con-dim">{new Date(key.createdAt).toLocaleDateString(dateLocale)}</td>
+                        <td>
+                          <div className="acc2-actions">
+                            <button type="button" className="acc2-icon-btn" onClick={() => handleCopyKey(key)} aria-label={t('Sao chép key {name}', { name: key.name })}>
+                              {copied === key.id ? <IconCheck /> : <IconCopy />}
+                            </button>
+                            <button
+                              type="button"
+                              className="acc2-icon-btn"
+                              onClick={() => toggleKeyVisibility(key.id)}
+                              aria-pressed={shown}
+                              aria-label={t('Hiện key {name}', { name: key.name })}
+                            >
+                              {shown ? <IconEyeOff /> : <IconEye />}
+                            </button>
+                            <button type="button" className="acc2-icon-btn con-snippet-btn" onClick={() => setSnippetKey(key)} aria-label={t('Mã mẫu cho client — {name}', { name: key.name })}>
+                              {'</>'}
+                            </button>
+                            <button
+                              type="button"
+                              className="acc2-icon-btn"
+                              onClick={() => setExpandedKey(open ? null : key.id)}
+                              aria-expanded={open}
+                              aria-controls={`con-key-more-${key.id}`}
+                              aria-label={t('Thao tác khác — {name}', { name: key.name })}
+                            >
+                              <IconMore />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {open && (
+                        <tr className="con-key-detail" id={`con-key-more-${key.id}`}>
+                          <td colSpan={5}>
+                            <div className="con-key-detail-body">
+                              {/* Per-key "Restrict access" — persisted on the key, enforced by /v1/* */}
+                              <KeyAccessControls
+                                apiKey={key}
+                                onChange={(access) => handleUpdateKeyAccess(key.id, access)}
+                                onRequestRestrict={() => setConfirmState({
+                                  title: 'Restrict API Key',
+                                  message: `Restrict API key "${key.name}"?\n\nIt will only be able to call the combos and models you add. Until you add one, it can call nothing.`,
+                                  onConfirm: async () => {
+                                    setConfirmState(null);
+                                    handleUpdateKeyAccess(key.id, { restricted: true, allow: key.access?.allow || [] });
+                                  }
+                                })}
+                              />
+                              <div className="con-key-detail-actions">
+                                <button type="button" className="acc2-btn small" onClick={() => requestToggleKey(key)}>
+                                  {key.isActive ? t('Tạm dừng key') : t('Bật lại key')}
+                                </button>
+                                <button type="button" className="acc2-btn small con-danger" onClick={() => handleDeleteKey(key.id)}>
+                                  {t('Xoá key')}
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-      </Card>
+      </section>
 
       <ApiDocsModal
         isOpen={showDocs}
@@ -1694,3 +1646,79 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
     </div>
   );
 }
+
+// Short display mask for a key that's already masked server-side
+// (sk-muse-xxxxxx…xxxx → sk-muse-xxxx…xxxx).
+function maskShort(key: string): string {
+  return key.length > 16 ? `${key.slice(0, 12)}…${key.slice(-4)}` : key;
+}
+
+type RowTone = 'ok' | 'warn' | 'bad' | 'muted';
+
+interface RowView {
+  state: string;
+  tone: RowTone;
+  busy?: boolean;
+  /** Copyable address; when missing the placeholder is shown instead. */
+  url?: string;
+  placeholder: string;
+  action: React.ReactNode;
+  /** Error / progress line under the row. */
+  note?: React.ReactNode;
+}
+
+/** One endpoint row: name + state, the address as a copy button, on/off action. */
+function ConnectRow({ name, view, copyId, copied, onCopy }: {
+  name: string;
+  view: RowView;
+  copyId: string;
+  copied: string | null;
+  onCopy: (text: string, id: string) => void;
+}) {
+  const { t } = useT();
+  return (
+    <div className="con-ep">
+      <div className="con-ep-grid">
+        <div className="con-ep-name">
+          <div className="con-ep-title">{name}</div>
+          <div className={`con-ep-state ${view.tone}`}>
+            {view.busy && <span className="con-spin" aria-hidden="true" />}
+            {view.state}
+          </div>
+        </div>
+        {view.url ? (
+          <button
+            type="button"
+            className="con-url"
+            onClick={() => onCopy(view.url!, copyId)}
+            aria-label={t('Sao chép địa chỉ {url}', { url: view.url })}
+          >
+            <code>{view.url}</code>
+            <span className="con-url-copy">{copied === copyId ? t('Đã sao chép') : t('Sao chép')}</span>
+          </button>
+        ) : (
+          <div className="con-url empty"><span>{view.placeholder}</span></div>
+        )}
+        <div className="con-ep-action">{view.action}</div>
+      </div>
+      {view.note}
+    </div>
+  );
+}
+
+const iconProps = { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true } as const;
+const IconCopy = () => (
+  <svg {...iconProps}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+);
+const IconCheck = () => (
+  <svg {...iconProps}><path d="M5 12.5l4.5 4.5L19 7" /></svg>
+);
+const IconEye = () => (
+  <svg {...iconProps}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+);
+const IconEyeOff = () => (
+  <svg {...iconProps}><path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A9.7 9.7 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4M6.1 6.1A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.9-2.1" /></svg>
+);
+const IconMore = () => (
+  <svg {...iconProps}><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></svg>
+);

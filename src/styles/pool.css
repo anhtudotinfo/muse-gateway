@@ -1,0 +1,238 @@
+/* pool page styles — Quota & lanes + Combos tabs (AccountsHub) */
+
+.pool-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pool-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+.pool-h2 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.pool-lead {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.pool-hint { font-size: 0.74rem; color: var(--text-tertiary); }
+.pool-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Settings row: strategy (2/3) + lanes stepper (1/3) */
+.pool-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.pool-strategies {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.pool-strategy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--apple-border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pool-strategy:hover:not(:disabled) { border-color: var(--apple-border-light); }
+.pool-strategy.active { border-color: #fb7185; background: rgba(251, 113, 133, 0.08); }
+.pool-strategy:disabled { cursor: default; opacity: 0.6; }
+.pool-strategy:focus-visible,
+.pool-step-btn:focus-visible { outline: 2px solid rgba(251, 113, 133, 0.6); outline-offset: 2px; }
+.pool-strategy-title { font-size: 0.86rem; font-weight: 600; }
+.pool-strategy-desc { font-size: 0.74rem; line-height: 1.5; color: var(--text-secondary); }
+
+.pool-stepper { display: flex; align-items: center; gap: 12px; }
+.pool-step-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--apple-border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.pool-step-btn:hover:not(:disabled) { border-color: var(--apple-border-light); background: rgba(255, 255, 255, 0.04); }
+.pool-step-btn:disabled { opacity: 0.4; cursor: default; }
+.pool-step-value {
+  min-width: 48px;
+  text-align: center;
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+/* Account status table */
+.pool-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+}
+.pool-head-right { display: flex; align-items: center; gap: 10px; }
+.pool-table { min-width: 900px; }
+.pool-table thead th { border-top: 1px solid var(--apple-border); }
+.pool-worker {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-family: ui-monospace, 'JetBrains Mono', monospace;
+  font-size: 0.74rem;
+}
+.pool-note {
+  max-width: 280px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.74rem;
+  color: var(--text-tertiary);
+}
+.pool-note.bad { color: var(--apple-red); }
+.pool-state { font-weight: 500; }
+.pool-state.ok { color: var(--apple-green); }
+.pool-state.bad { color: var(--apple-red); }
+.pool-state.busy { color: #67e8f9; }
+.pool-state.warn { color: #fbbf24; }
+.pool-state.idle { color: var(--text-tertiary); }
+.pool-dim { color: var(--text-secondary) !important; }
+
+.pool-lanes-cell,
+.pool-wrap { white-space: normal !important; }
+.pool-lanes { display: flex; flex-wrap: wrap; gap: 6px; }
+.pool-lane {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-family: ui-monospace, 'JetBrains Mono', monospace;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+.pool-lane.busy { background: rgba(103, 232, 249, 0.12); color: #67e8f9; }
+.pool-lane.opening { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+.pool-lane-close {
+  margin-left: 2px;
+  padding: 0 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.pool-lane-close:hover,
+.pool-lane-close:focus-visible { opacity: 1; color: var(--text-primary); }
+
+.pool-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 24px;
+  border-top: 1px solid var(--apple-border);
+}
+.pool-skel { height: 36px; }
+
+/* Combos */
+.pool-explainer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 16px 20px;
+}
+.pool-explainer-text {
+  flex: 1 1 420px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.pool-explainer-text b,
+.pool-explainer-text code { color: var(--text-primary); }
+.pool-explainer-text code,
+.pool-code,
+.pool-combo-name code,
+.pool-input { font-family: ui-monospace, 'JetBrains Mono', monospace; }
+.pool-code {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--apple-border);
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+.pool-combo-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pool-combo-name code { font-size: 0.82rem; font-weight: 500; color: var(--text-primary); }
+.pool-copy { width: 30px; height: 30px; border-radius: 7px; }
+.pool-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.pool-tag {
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--apple-border);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+.acc2-btn.pool-danger { color: var(--apple-red); }
+
+.pool-form { border-color: #fb7185; gap: 16px; }
+.pool-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 20px;
+}
+.pool-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pool-label { font-size: 0.8rem; color: var(--text-secondary); }
+.pool-label-gap { margin-top: 6px; }
+.pool-help { font-size: 0.74rem; color: var(--text-tertiary); }
+.pool-input {
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--apple-border);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+.pool-input:focus { outline: 2px solid rgba(251, 113, 133, 0.5); outline-offset: 1px; }
+.pool-segment { width: fit-content; max-width: 100%; }
+.pool-checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.pool-check { color: var(--text-primary); }
+.pool-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+@media (max-width: 900px) {
+  .pool-settings,
+  .pool-form-grid { grid-template-columns: minmax(0, 1fr); }
+}

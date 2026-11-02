@@ -7,14 +7,19 @@ import type { PoolAccountView, PoolStateView } from '@/lib/musePool';
 
 function fmtCooldown(ms: number): string {
   const s = Math.ceil(ms / 1000);
-  if (s >= 3600) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  if (s >= 60) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  return `${s}s`;
+  if (s >= 3600) return `${Math.floor(s / 3600)} giờ ${Math.floor((s % 3600) / 60)} phút`;
+  if (s >= 60) return `${Math.ceil(s / 60)} phút`;
+  return `${s} giây`;
+}
+
+function fmtAvg(ms: number): string {
+  const s = ms / 1000;
+  return s < 10 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
 }
 
 const KIND_LABEL: Record<string, string> = {
   auth: 'Cookie hết hạn / lỗi auth',
-  quota: 'Hết lượt / rate limit',
+  quota: 'Hết lượt',
   transient: 'Lỗi tạm thời',
 };
 
@@ -25,58 +30,74 @@ interface AccountUsage {
   ok: number;
 }
 
-const STATUS_BADGE: Record<string, { text: string; bg: string; color: string }> = {
-  busy: { text: 'Đang gửi', bg: 'rgba(103,232,249,0.15)', color: '#67e8f9' },
-  queued: { text: 'Đang chờ', bg: 'rgba(251,191,36,0.15)', color: '#fbbf24' },
-};
+const STRATEGIES = [
+  { key: 'round-robin', title: 'Xoay đều', desc: 'Lần lượt từng tài khoản, chia tải đều nhau.' },
+  { key: 'fallback', title: 'Dự phòng theo thứ tự', desc: 'Luôn dùng tài khoản đầu, lỗi mới chuyển sang tài khoản sau.' },
+  { key: 'fusion', title: 'Chạy song song', desc: 'Gửi cùng lúc tới mọi tài khoản, lấy kết quả về trước. Tốn lượt.' },
+] as const;
 
-/** Per-account lane strip — one chip per page: busy lanes show the Muse
- *  thread they're driving, idle lanes offer a close (×) control. */
-function LaneStrip({
+const LANE_MIN = 1;
+const LANE_MAX = 6;
+
+/** Status column: what the pool will do with this account right now. */
+function accountState(a: PoolAccountView): { text: string; tone: string } {
+  if (!a.enabled) return { text: 'Đã tắt', tone: 'idle' };
+  if (a.cooldownRemainingMs > 0) return { text: `Cooldown ${fmtCooldown(a.cooldownRemainingMs)}`, tone: 'bad' };
+  if (a.status === 'busy') return { text: 'Đang gửi', tone: 'busy' };
+  if (a.status === 'queued') return { text: 'Đang chờ lane', tone: 'warn' };
+  if (a.failCount > 0) return { text: `${a.failCount} lỗi gần đây`, tone: 'warn' };
+  return { text: 'Nhận request', tone: 'ok' };
+}
+
+/** Sub-line under the account name: why it is cooling / last error / last use. */
+function accountNote(a: PoolAccountView): { text: string; bad: boolean } {
+  if (a.cooldownRemainingMs > 0) {
+    const kind = KIND_LABEL[a.cooldownReason] || 'Đang nghỉ';
+    return { text: `${kind} — thử lại sau ${fmtCooldown(a.cooldownRemainingMs)}`, bad: true };
+  }
+  if (a.failCount > 0 && a.lastError) return { text: a.lastError, bad: true };
+  if (a.lastUsedAt > 0) {
+    const t = new Date(a.lastUsedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    return { text: `Dùng lần cuối ${t}`, bad: false };
+  }
+  return { text: 'Chưa dùng', bad: false };
+}
+
+/** Per-account lane chips — one per page: busy lanes show the Muse thread
+ *  they're driving, idle lanes offer a close (×) control. */
+function LaneChips({
   lanes,
   onClose,
 }: {
   lanes: PoolAccountView['lanes'];
   onClose: (index: number) => void;
 }) {
-  if (!lanes.lanes.length && !lanes.creating) return null;
+  if (!lanes || (!lanes.lanes.length && !lanes.creating)) {
+    return <span className="acc2-muted">Chưa mở luồng</span>;
+  }
   return (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+    <div className="pool-lanes">
       {lanes.lanes.map((l) => (
         <span
           key={l.index}
-          className="tag-badge"
-          title={l.threadUrl || 'Lane rảnh — chưa lái thread nào'}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            background: l.busy ? 'rgba(103,232,249,0.15)' : 'rgba(255,255,255,0.06)',
-            color: l.busy ? '#67e8f9' : 'var(--text-tertiary)',
-          }}
+          className={`pool-lane ${l.busy ? 'busy' : ''}`}
+          title={l.threadUrl || (l.busy ? 'Đang tạo thread mới' : 'Luồng rảnh — chưa lái thread nào')}
         >
-          L{l.index}
-          {l.busy ? ` ⚡${l.threadId ? l.threadId.slice(0, 8) : 'gen'}` : ' rảnh'}
+          L{l.index} {l.busy ? 'đang chạy' : 'rảnh'}
           {!l.busy && (
             <button
               type="button"
-              title="Đóng lane — giải phóng tab"
+              className="pool-lane-close"
+              aria-label={`Đóng luồng L${l.index} — giải phóng tab`}
+              title="Đóng luồng — giải phóng tab"
               onClick={() => onClose(l.index)}
-              style={{ marginLeft: 2, opacity: 0.55, cursor: 'pointer', fontSize: 11 }}
             >
               ×
             </button>
           )}
         </span>
       ))}
-      {lanes.creating > 0 && (
-        <span className="tag-badge" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
-          +{lanes.creating} đang mở
-        </span>
-      )}
-      <span className="tag-badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-tertiary)' }}>
-        {lanes.busy}/{lanes.cap}
-      </span>
+      {lanes.creating > 0 && <span className="pool-lane opening">+{lanes.creating} đang mở</span>}
     </div>
   );
 }
@@ -121,154 +142,180 @@ export function QuotaTab() {
   };
 
   const saveLaneCap = async (n: number) => {
-    setLaneCap(n);
+    const next = Math.min(LANE_MAX, Math.max(LANE_MIN, n));
+    if (next === laneCap) return;
+    setLaneCap(next);
     try {
       await fetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lanesPerAccount: n }),
+        body: JSON.stringify({ lanesPerAccount: next }),
       });
     } catch {}
   };
 
   const accounts = state?.accounts || [];
+  // Accounts needing attention first, then the healthy ones.
   const flagged = accounts.filter((a) => a.cooldownRemainingMs > 0 || a.failCount > 0);
   const healthy = accounts.filter((a) => a.cooldownRemainingMs <= 0 && a.failCount === 0);
+  const rows = [...flagged, ...healthy];
+  const enabledCount = accounts.filter((a) => a.enabled).length;
 
   return (
-    <div className="tab-surface">
-      <div className="tab-top-caption">
-        <span className="caption-text">Trạng thái quota/cooldown từng tài khoản và cách pool chia request.</span>
-        <div className="apple-segmented-control" title="Cách pool chọn account cho mỗi request.">
-          {(['round-robin', 'fallback'] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              className={`segment-item ${state?.strategy === s ? 'selected' : ''}`}
-              disabled={!state}
-              onClick={() => state?.strategy !== s && patch({ strategy: s })}
-            >
-              {s === 'round-robin' ? 'Round-robin' : 'Fallback'}
-            </button>
-          ))}
+    <div className="pool-page">
+      <section aria-label="Cài đặt pool" className="pool-settings">
+        <div className="ov2-card pool-card">
+          <div>
+            <h2 className="pool-h2">Cách chia request</h2>
+            <p className="pool-lead">Áp dụng cho mọi request không gọi tên combo.</p>
+          </div>
+          <div role="radiogroup" aria-label="Cách chia request" className="pool-strategies">
+            {STRATEGIES.map((s) => {
+              const on = state?.strategy === s.key;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  className={`pool-strategy ${on ? 'active' : ''}`}
+                  disabled={!state}
+                  onClick={() => !on && patch({ strategy: s.key })}
+                >
+                  <span className="pool-strategy-title">{s.title}</span>
+                  <span className="pool-strategy-desc">{s.desc}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <label
-          title="Số luồng (tab) tối đa mỗi tài khoản — mỗi lane lái một Muse thread riêng, N lanes = N gen song song trên cùng 1 account"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}
-        >
-          Luồng/acc
-          <select
-            value={laneCap}
-            onChange={(e) => saveLaneCap(Number(e.target.value))}
-            className="apple-tool-btn"
-            style={{ padding: '2px 6px' }}
-          >
-            {[1, 2, 3, 4, 5, 6].map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="apple-tool-btn" onClick={refresh}>
-          Làm mới
-        </button>
-      </div>
 
-      <div className="apple-profiles-stack">
-        {accounts.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-tertiary)' }}>
-            {state ? 'Chưa có tài khoản nào.' : 'Đang tải…'}
+        <div className="ov2-card pool-card">
+          <div>
+            <h2 className="pool-h2">Luồng mỗi tài khoản</h2>
+            <p className="pool-lead">Số tác vụ một tài khoản chạy cùng lúc, mỗi luồng là một thread Muse.</p>
+          </div>
+          <div className="pool-stepper">
+            <button
+              type="button"
+              className="pool-step-btn"
+              aria-label="Giảm số luồng"
+              disabled={laneCap <= LANE_MIN}
+              onClick={() => saveLaneCap(laneCap - 1)}
+            >
+              −
+            </button>
+            <span className="pool-step-value" aria-live="polite">{laneCap}</span>
+            <button
+              type="button"
+              className="pool-step-btn"
+              aria-label="Tăng số luồng"
+              disabled={laneCap >= LANE_MAX}
+              onClick={() => saveLaneCap(laneCap + 1)}
+            >
+              +
+            </button>
+          </div>
+          <span className="acc2-muted pool-hint">
+            {state
+              ? `Pool chạy tối đa ${laneCap * enabledCount} tác vụ song song với ${enabledCount} tài khoản đang bật.`
+              : `Tối đa ${LANE_MIN}–${LANE_MAX} luồng mỗi tài khoản.`}
+          </span>
+        </div>
+      </section>
+
+      <section aria-label="Trạng thái từng tài khoản" className="acc2-card">
+        <div className="pool-card-head">
+          <h2 className="pool-h2">Trạng thái từng tài khoản</h2>
+          <div className="pool-head-right">
+            <span className="acc2-muted">Tự cập nhật mỗi 5 giây</span>
+            <button type="button" className="acc2-icon-btn" aria-label="Làm mới" title="Làm mới" onClick={refresh}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {rows.length === 0 ? (
+          state ? (
+            <div className="acc2-empty">Chưa có tài khoản nào.</div>
+          ) : (
+            <div className="pool-loading" aria-busy="true">
+              <div className="skeleton pool-skel" />
+              <div className="skeleton pool-skel" />
+              <span className="acc2-muted">Đang tải…</span>
+            </div>
+          )
+        ) : (
+          <div className="acc2-scroll">
+            <table className="acc2-table pool-table">
+              <thead>
+                <tr>
+                  <th>Tài khoản</th>
+                  <th>Trạng thái</th>
+                  <th>Luồng</th>
+                  <th className="num">Thành công</th>
+                  <th className="num">TB</th>
+                  <th className="num">Request</th>
+                  <th><span className="pool-sr">Thao tác</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((a) => {
+                  const st = accountState(a);
+                  const note = accountNote(a);
+                  const u = usageById[a.id];
+                  const needsReset = a.cooldownRemainingMs > 0 || a.failCount > 0;
+                  return (
+                    <tr key={a.id}>
+                      <td>
+                        <div className="acc2-who">
+                          <span className="pool-worker">{a.worker}</span>
+                          <div className="acc2-who-text">
+                            <div className="acc2-name">{maskName(a.name, maskEmails)}</div>
+                            <div className={`pool-note ${note.bad ? 'bad' : ''}`} title={note.text}>{note.text}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`pool-state ${st.tone}`}>{st.text}</span>
+                      </td>
+                      <td className="pool-lanes-cell">
+                        <LaneChips lanes={a.lanes} onClose={(i) => patch({ accountId: a.id, closeLane: i })} />
+                      </td>
+                      <td className="num">{u && u.requests ? `${Math.round((u.ok / u.requests) * 100)}%` : '—'}</td>
+                      <td className="num pool-dim">{u && u.avgMs ? fmtAvg(u.avgMs) : '—'}</td>
+                      <td className="num">{a.totalRequests}</td>
+                      <td>
+                        <div className="acc2-actions">
+                          {needsReset && (
+                            <button
+                              type="button"
+                              className="acc2-btn small"
+                              onClick={() => patch({ accountId: a.id, resetCooldown: true })}
+                            >
+                              Xoá cooldown
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="acc2-btn small"
+                            title={a.enabled ? 'Tạm tắt tài khoản khỏi pool' : 'Bật lại tài khoản trong pool'}
+                            onClick={() => patch({ accountId: a.id, enabled: !a.enabled })}
+                          >
+                            {a.enabled ? 'Tạm tắt' : 'Bật lại'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
-
-        {flagged.map((a) => (
-          <div key={a.id} className="apple-list-item">
-            <div className="item-left-block">
-              <h4>
-                <span className="tag-badge" style={{ background: 'var(--apple-purple-dim)', color: 'var(--apple-purple)', fontFamily: 'monospace' }}>{a.worker}</span>
-                {maskName(a.name, maskEmails)}
-                <span className="tag-badge" style={{ background: 'var(--apple-red-dim)', color: 'var(--apple-red)' }}>
-                  {!a.enabled ? 'Tắt' : a.cooldownRemainingMs > 0 ? `cooldown ${fmtCooldown(a.cooldownRemainingMs)}` : `${a.failCount} lỗi`}
-                </span>
-              </h4>
-              <div className="item-timestamp">
-                {KIND_LABEL[a.cooldownReason] || '—'} · {a.totalRequests} requests tổng
-                {usageById[a.id] && ` · TB ${(usageById[a.id].avgMs / 1000).toFixed(1)}s`}
-              </div>
-              {a.lastError && (
-                <div className="item-timestamp" style={{ color: 'var(--apple-red)' }}>{a.lastError}</div>
-              )}
-              {a.lanes && (
-                <LaneStrip
-                  lanes={a.lanes}
-                  onClose={(i) => patch({ accountId: a.id, closeLane: i })}
-                />
-              )}
-            </div>
-            <div className="item-right-actions">
-              <button
-                type="button"
-                className="btn-item-use"
-                onClick={() => patch({ accountId: a.id, resetCooldown: true })}
-              >
-                Reset
-              </button>
-              <button
-                type="button"
-                className={a.enabled ? 'btn-item-del' : 'btn-item-use'}
-                onClick={() => patch({ accountId: a.id, enabled: !a.enabled })}
-                title={a.enabled ? 'Tắt account' : 'Bật account'}
-              >
-                {a.enabled ? 'Tắt' : 'Bật'}
-              </button>
-            </div>
-          </div>
-        ))}
-
-        {healthy.map((a) => (
-          <div key={a.id} className="apple-list-item">
-            <div className="item-left-block">
-              <h4>
-                <span className="tag-badge" style={{ background: 'var(--apple-purple-dim)', color: 'var(--apple-purple)', fontFamily: 'monospace' }}>{a.worker}</span>
-                {maskName(a.name, maskEmails)}
-                <span
-                  className="tag-badge"
-                  style={
-                    STATUS_BADGE[a.status] && a.enabled
-                      ? { background: STATUS_BADGE[a.status].bg, color: STATUS_BADGE[a.status].color }
-                      : a.enabled
-                        ? { background: 'var(--apple-green-dim)', color: 'var(--apple-green)' }
-                        : { background: 'var(--apple-surface-hover, rgba(255,255,255,0.08))', color: 'var(--text-tertiary)' }
-                  }
-                >
-                  {a.enabled ? (STATUS_BADGE[a.status]?.text || 'OK') : 'Tắt'}
-                </span>
-              </h4>
-              <div className="item-timestamp">
-                {a.totalRequests} requests
-                {usageById[a.id] &&
-                  ` · ${usageById[a.id].requests ? Math.round((usageById[a.id].ok / usageById[a.id].requests) * 100) : 0}% success · TB ${(usageById[a.id].avgMs / 1000).toFixed(1)}s`}
-                {a.lastUsedAt > 0 && ` · dùng lần cuối ${new Date(a.lastUsedAt).toLocaleTimeString('vi-VN')}`}
-              </div>
-              {a.lanes && (
-                <LaneStrip
-                  lanes={a.lanes}
-                  onClose={(i) => patch({ accountId: a.id, closeLane: i })}
-                />
-              )}
-            </div>
-            <div className="item-right-actions">
-              <button
-                type="button"
-                className={a.enabled ? 'btn-item-del' : 'btn-item-use'}
-                onClick={() => patch({ accountId: a.id, enabled: !a.enabled })}
-                title={a.enabled ? 'Tắt account' : 'Bật account'}
-              >
-                {a.enabled ? 'Tắt' : 'Bật'}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+      </section>
     </div>
   );
 }

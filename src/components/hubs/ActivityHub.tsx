@@ -15,12 +15,11 @@ export function ActivityHub({ initialTab }: { initialTab?: string }) {
         onChange={setTab}
         tabs={[
           { id: 'stats', label: 'Statistics' },
-          { id: 'logs', label: 'Console Log' },
+          { id: 'logs', label: 'Nhật ký' },
         ]}
       />
-      <section className="router-page-card">
-        {tab === 'stats' ? <UsageTab /> : <ConsoleLogTab />}
-      </section>
+      {/* Each tab draws its own cards — no shared page-card wrapper. */}
+      {tab === 'stats' ? <UsageTab /> : <ConsoleLogTab />}
     </>
   );
 }

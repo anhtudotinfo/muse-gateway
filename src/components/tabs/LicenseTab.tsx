@@ -6,52 +6,46 @@ import { maskName } from '@/lib/mask';
 import type { LicenseView } from '@/lib/license';
 import { useT } from '@/lib/i18n';
 
-const inputStyle: React.CSSProperties = {
-  padding: '8px 11px',
-  borderRadius: 8,
-  border: '1px solid var(--apple-border-light)',
-  background: 'var(--apple-surface)',
-  fontSize: 13,
-  fontFamily: 'inherit',
-  color: 'var(--text-primary)',
-  width: '100%',
-};
+const STORE_URL = 'https://www.storetiki.online';
+const SUPPORT_URL = 'https://t.me/ministoretiki_bbqqvv_bot';
 
-const fieldLabel: React.CSSProperties = {
-  fontSize: 11,
-  color: 'var(--text-tertiary)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  marginBottom: 4,
-};
+/** The key's middle part is base64 of the payload, which carries the buyer
+ *  email — show only its ends. Copy buttons still copy the full key. */
+function shortKey(key: string): string {
+  if (!key) return '';
+  return key.length > 18 ? `${key.slice(0, 10)}•••••••••${key.slice(-4)}` : '•••••••••';
+}
 
-const fieldBox: React.CSSProperties = {
-  background: 'var(--apple-surface-hover, rgba(255,255,255,0.04))',
-  border: '1px solid var(--apple-border-light, rgba(255,255,255,0.08))',
-  borderRadius: 8,
-  padding: '9px 12px',
-  fontSize: 13,
-  fontFamily: 'monospace',
-  color: 'var(--text-primary)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 8,
-  minWidth: 0,
-};
+function daysLeft(iso: string): number {
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+}
 
-function Field({ label, value, mono = true, onCopy, copyLabel }: { label: string; value: string; mono?: boolean; onCopy?: () => void; copyLabel?: string }) {
+function DetailRow({
+  label,
+  value,
+  mono = false,
+  onCopy,
+  copyLabel,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  onCopy?: () => void;
+  copyLabel: string;
+}) {
   return (
-    <div style={{ minWidth: 0 }}>
-      <div style={fieldLabel}>{label}</div>
-      <div style={{ ...fieldBox, fontFamily: mono ? 'monospace' : 'inherit' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value || '—'}</span>
+    <div className="lic-row">
+      <span className="lic-row-label">{label}</span>
+      <span className={`lic-row-value${mono ? ' mono' : ''}`} title={mono ? undefined : value}>
+        {value || '—'}
+      </span>
+      <span className="lic-row-action">
         {onCopy && (
-          <button type="button" className="apple-tool-btn" style={{ padding: '2px 8px', fontSize: 11, flexShrink: 0 }} onClick={onCopy}>
+          <button type="button" className="acc2-btn small" onClick={onCopy} aria-label={`${copyLabel} ${label}`}>
             {copyLabel}
           </button>
         )}
-      </div>
+      </span>
     </div>
   );
 }
@@ -60,6 +54,7 @@ export function LicenseTab() {
   const { maskEmails, copyText, showToast } = useApp();
   const { t } = useT();
   const [lic, setLic] = useState<LicenseView | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [formKey, setFormKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -68,7 +63,10 @@ export function LicenseTab() {
     try {
       const j = await (await fetch('/api/license')).json();
       setLic(j);
-    } catch {}
+    } catch {
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -92,7 +90,8 @@ export function LicenseTab() {
     }
   };
 
-  const activate = async () => {
+  const activate = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (!formKey.trim()) {
       showToast(t('Dán license key trước'), 'error');
       return;
@@ -125,150 +124,178 @@ export function LicenseTab() {
     refresh();
   };
 
-  const badge = lic
-    ? lic.type === 'expired'
-      ? { text: t('Hết hạn'), bg: 'var(--apple-red-dim)', color: 'var(--apple-red)' }
-      : lic.type === 'invalid'
-        ? { text: t('Không hợp lệ'), bg: 'var(--apple-red-dim)', color: 'var(--apple-red)' }
-        : lic.licensed
-          ? { text: t('Licensed'), bg: 'var(--apple-green-dim)', color: 'var(--apple-green)' }
-          : { text: t('Community'), bg: 'var(--apple-surface-hover, rgba(255,255,255,0.08))', color: 'var(--text-tertiary)' }
-    : null;
+  // Hero: what state the machine is in, and when it runs out.
+  const tone = lic?.licensed ? 'ok' : lic && (lic.type === 'expired' || lic.type === 'invalid') ? 'bad' : '';
+  const title = lic?.licensed
+    ? t('Pro · đang hoạt động')
+    : lic?.type === 'expired'
+      ? t('License đã hết hạn')
+      : lic?.type === 'invalid'
+        ? t('License không hợp lệ')
+        : t('Chưa kích hoạt');
+  const expiry = lic?.expiresAt
+    ? (() => {
+        const date = new Date(lic.expiresAt).toLocaleDateString();
+        const days = daysLeft(lic.expiresAt);
+        return days > 0
+          ? t('Hết hạn {date} · còn {n} ngày', { date, n: days })
+          : t('Hết hạn từ {date}', { date });
+      })()
+    : lic?.licensed
+      ? t('Không giới hạn thời gian')
+      : t('API /v1 đang khoá cho tới khi kích hoạt license.');
+
+  const copyLabel = t('Sao chép');
 
   return (
-    <div className="tab-surface">
-      <div className="ov-card" style={{ maxWidth: 860, margin: '0 auto' }}>
-        <div className="ov-card-head">
-          <div>
-            <div className="ov-card-title">{t('Thông tin bản quyền')}</div>
-            <div className="ov-card-desc">
-              {t('License key chứa email + hạn + khóa HWID, ký Ed25519 — verify kiểm tra chữ ký thật, key sửa/giả sẽ bị từ chối.')}
+    <div className="lic">
+      {!loaded ? (
+        <section className="ov2-card lic-hero" aria-busy="true">
+          <span className="skeleton lic-hero-icon" />
+          <div className="lic-hero-text">
+            <span className="skeleton lic-skel-line wide" />
+            <span className="skeleton lic-skel-line" />
+          </div>
+        </section>
+      ) : (
+        <section className="ov2-card lic-hero" aria-label={t('Trạng thái bản quyền')}>
+          <div className="lic-hero-main">
+            <span className={`lic-hero-icon ${tone}`}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                {lic?.licensed ? (
+                  <path d="M9 12l2 2 4-4M12 22c-4 0-7-3.6-7-8V6.5L12 4l7 2.5V14c0 4.4-3 8-7 8z" />
+                ) : (
+                  <path d="M12 9v4M12 17h.01M12 22c-4 0-7-3.6-7-8V6.5L12 4l7 2.5V14c0 4.4-3 8-7 8z" />
+                )}
+              </svg>
+            </span>
+            <div className="lic-hero-text">
+              <div className="lic-hero-title">{title}</div>
+              <div className="acc2-muted">{expiry}</div>
             </div>
           </div>
-          {badge && (
-            <span className="tag-badge" style={{ background: badge.bg, color: badge.color, fontSize: 12, padding: '4px 12px' }}>
-              ● {badge.text}
-            </span>
+          <div className="lic-hero-actions">
+            <button type="button" className="acc2-btn" onClick={verify} disabled={verifying || !lic?.keyFull}>
+              {verifying ? t('Đang kiểm tra…') : t('Kiểm tra lại')}
+            </button>
+            <a className="acc2-btn primary" href={STORE_URL} target="_blank" rel="noreferrer">
+              {lic?.licensed ? t('Gia hạn') : t('Mua key')}
+            </a>
+          </div>
+          {lic?.reason && !lic.licensed && lic.type !== 'community' && (
+            <p className="lic-reason" role="alert">{lic.reason}</p>
           )}
-        </div>
+        </section>
+      )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-          <Field label={t('Sản phẩm')} value={`${lic?.product || 'muse_gateway'} · v${lic?.version || '—'}`} />
-          <Field label={t('Loại license')} value={lic?.type || 'community'} />
-          <Field
+      {loaded && lic?.licensed && (
+        <section className="acc2-card lic-details" aria-label={t('Chi tiết bản quyền')}>
+          <DetailRow
+            label={t('Sản phẩm')}
+            value={`${lic.product || 'muse_gateway'} · v${lic.version || '—'}`}
+            copyLabel={copyLabel}
+          />
+          <DetailRow
             label={t('Email đăng ký')}
-            value={lic?.email ? maskName(lic.email, maskEmails) : ''}
-            onCopy={lic?.email ? () => copyText(lic.email, t('email đăng ký')) : undefined}
-            copyLabel={t('Sao chép')}
+            value={lic.email ? maskName(lic.email, maskEmails) : ''}
+            onCopy={lic.email ? () => copyText(lic.email, t('email đăng ký')) : undefined}
+            copyLabel={copyLabel}
           />
-          <Field
+          <DetailRow
             label={t('License Key')}
-            value={lic?.keyMasked || ''}
-            onCopy={lic?.keyFull ? () => copyText(lic.keyFull, t('license key')) : undefined}
-            copyLabel={t('Sao chép')}
+            value={shortKey(lic.keyFull)}
+            mono
+            onCopy={lic.keyFull ? () => copyText(lic.keyFull, t('license key')) : undefined}
+            copyLabel={copyLabel}
           />
-          <Field
-            label={t('Hết hạn')}
-            value={lic?.expiresAt ? new Date(lic.expiresAt).toLocaleString() : lic?.licensed ? t('Không giới hạn') : ''}
-            mono={false}
+          <DetailRow
+            label={t('Mã máy (HWID)')}
+            value={lic.hwidMasked}
+            mono
+            onCopy={lic.hwid ? () => copyText(lic.hwid, 'HWID') : undefined}
+            copyLabel={copyLabel}
           />
-          <Field
-            label={t('HWID (máy này)')}
-            value={lic?.hwidMasked || ''}
-            onCopy={lic?.hwid ? () => copyText(lic.hwid, 'HWID') : undefined}
-            copyLabel={t('Sao chép')}
+          <DetailRow
+            label={t('Khóa theo máy')}
+            value={lic.hwidBound ? t('Có — key chỉ chạy trên máy này') : t('Không — floating license')}
+            copyLabel={copyLabel}
           />
-          {lic?.licensed && (
-            <Field
-              label={t('Khóa theo máy')}
-              value={lic.hwidBound ? t('Có — key chỉ chạy trên máy này') : t('Không — floating license')}
-              mono={false}
+          {lic.activatedAt && (
+            <DetailRow
+              label={t('Kích hoạt lúc')}
+              value={new Date(lic.activatedAt).toLocaleString()}
+              copyLabel={copyLabel}
             />
           )}
-          {lic?.activatedAt && (
-            <Field label={t('Kích hoạt lúc')} value={new Date(lic.activatedAt).toLocaleString()} mono={false} />
-          )}
-        </div>
+          <div className="lic-verify">
+            {t('Lần kiểm tra gần nhất:')}{' '}
+            {lic.lastVerifyAt ? (
+              <>
+                {new Date(lic.lastVerifyAt).toLocaleString()} ·{' '}
+                <span className={lic.lastVerifyOk ? 'lic-ok' : 'lic-bad'}>
+                  {lic.lastVerifyOk ? t('thành công') : t('thất bại')}
+                </span>
+              </>
+            ) : (
+              t('chưa kiểm tra')
+            )}
+          </div>
+        </section>
+      )}
 
-        {lic?.reason && !lic.licensed && lic.type !== 'community' && (
-          <div style={{ marginTop: 12, fontSize: 12, color: 'var(--apple-red)' }}>⚠ {lic.reason}</div>
-        )}
-
-        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-tertiary)' }}>
-          {t('Mua key:')}{' '}
-          <a href="https://www.storetiki.online" target="_blank" rel="noreferrer" style={{ color: 'var(--apple-blue, #0a84ff)' }}>
-            storetiki.online
-          </a>
-          {' '}· {t('Hỗ trợ:')}{' '}
-          <a href="https://t.me/ministoretiki_bbqqvv_bot" target="_blank" rel="noreferrer" style={{ color: 'var(--text-secondary)' }}>
-            Telegram @ministoretiki_bbqqvv_bot
-          </a>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" className="apple-tool-btn" onClick={verify} disabled={verifying || !lic?.keyFull}>
-            {verifying ? t('Đang kiểm tra…') : t('↻ Kiểm tra lại')}
-          </button>
-          {lic?.keyFull && (
-            <button type="button" className="apple-tool-btn" style={{ color: 'var(--apple-red)' }} onClick={remove}>
-              {t('Gỡ license khỏi máy này')}
-            </button>
-          )}
-        </div>
-
-        {/* Unlicensed notice — tell users the gateway API is locked and where to buy */}
-        {!lic?.licensed && (
-          <div
-            style={{
-              marginTop: 14,
-              padding: '10px 12px',
-              borderRadius: 8,
-              background: 'rgba(255,159,10,0.10)',
-              border: '1px solid rgba(255,159,10,0.35)',
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: 'var(--apple-orange, #ff9f0a)',
-            }}
-          >
+      {/* Activation — single signed key (email/expiry/HWID embedded) */}
+      {loaded && !lic?.licensed && (
+        <section className="acc2-card lic-activate" aria-label={t('Kích hoạt license')}>
+          <p className="lic-notice">
             {t('Gateway API {api} đang khóa — mọi request trả {code}. Mua license key tại {site} hoặc nhắn Telegram {tg}, rồi dán key vào ô bên dưới.', {
               api: '/v1/*',
               code: '402 license_required',
               site: 'storetiki.online',
               tg: '@ministoretiki_bbqqvv_bot',
             })}
-          </div>
-        )}
+          </p>
+          <form className="lic-form" onSubmit={activate}>
+            <label htmlFor="lic-key" className="lic-label">{t('License Key')}</label>
+            <div className="lic-form-row">
+              <input
+                id="lic-key"
+                className="lic-input"
+                placeholder={t('Dán license key (MUSE1.…)')}
+                value={formKey}
+                onChange={(e) => setFormKey(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <button type="submit" className="acc2-btn primary" disabled={saving}>
+                {saving ? t('Đang kiểm tra…') : t('Kích hoạt license')}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
 
-        {/* Activation — single signed key (email/expiry/HWID embedded) */}
-        {!lic?.licensed && (
-          <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'stretch' }}>
-            <input
-              style={{ ...inputStyle, fontFamily: 'monospace' }}
-              placeholder={t('Dán license key (MUSE1.…)')}
-              value={formKey}
-              onChange={(e) => setFormKey(e.target.value)}
-              spellCheck={false}
-            />
-            <button type="button" className="btn-apple-secondary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} onClick={activate} disabled={saving}>
-              {saving ? t('Đang kiểm tra…') : t('✓ Kích hoạt license')}
-            </button>
-          </div>
-        )}
+      <section className="lic-support" aria-label={t('Hỗ trợ')}>
+        <span>
+          {t('Mua key:')}{' '}
+          <a className="ov2-link" href={STORE_URL} target="_blank" rel="noreferrer">storetiki.online</a>
+        </span>
+        <span>
+          {t('Hỗ trợ:')}{' '}
+          <a className="ov2-link" href={SUPPORT_URL} target="_blank" rel="noreferrer">Telegram @ministoretiki_bbqqvv_bot</a>
+        </span>
+      </section>
 
-        <div style={{ marginTop: 14, fontSize: 12, color: 'var(--text-tertiary)' }}>
-          {t('Lần verify gần nhất:')}{' '}
-          {lic?.lastVerifyAt ? (
-            <>
-              {new Date(lic.lastVerifyAt).toLocaleString()} —{' '}
-              <span style={{ color: lic.lastVerifyOk ? 'var(--apple-green)' : 'var(--apple-red)' }}>
-                {lic.lastVerifyOk ? t('Thành công!') : t('Thất bại')}
-              </span>
-            </>
-          ) : (
-            t('chưa verify')
-          )}
-        </div>
-      </div>
+      {lic?.keyFull && (
+        <section className="lic-danger" aria-label={t('Gỡ bản quyền')}>
+          <div>
+            <div className="lic-danger-title">{t('Gỡ license khỏi máy này')}</div>
+            <div className="acc2-muted">{t('API /v1 sẽ đóng cho tới khi kích hoạt lại.')}</div>
+          </div>
+          <button type="button" className="acc2-btn lic-danger-btn" onClick={remove}>
+            {t('Gỡ license')}
+          </button>
+        </section>
+      )}
     </div>
   );
 }

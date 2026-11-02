@@ -1,182 +1,85 @@
 "use client";
 
-// Usage & Analytics tab — port of 9router's usage page (page.js + UsageStats),
-// adapted to muse's /api/usage payload. No backend changes: per-key/endpoint
-// breakdowns, cached tokens and cost show graceful empty/"—" states.
-// Polls REST every 8s (muse has no usage SSE stream).
+// Thống kê tab — KPIs, stacked daily bars, per-account / per-model breakdowns
+// and a grouped detail table over muse's /api/usage payload. Range selector
+// and CSV export live in the shell header (<HeaderSlot>). Polls every 8s.
+//
+// The server aggregates totals, days and accounts over the whole range; model /
+// key / endpoint groupings only exist per request, so they are built from the
+// `recent` window (newest 50) and labelled as such when the range is larger.
 
-import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import dynamic from "next/dynamic";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "@/components/AppShell";
+import { HeaderSlot } from "@/components/HeaderSlot";
+import { useT } from "@/lib/i18n";
 import { maskName } from "@/lib/mask";
-import SegmentedControl from "@/components/endpoint/ui/SegmentedControl";
-import Badge from "@/components/endpoint/ui/Badge";
-import OverviewCards from "@/components/usage/OverviewCards";
-import RecentRequests from "@/components/usage/RecentRequests";
-import UsageTable, { type UsageTableGroup, type UsageTableItem } from "@/components/usage/UsageTable";
-import RequestDetailsTab from "@/components/usage/RequestDetailsTab";
-import {
-  USAGE_PERIODS,
-  estInputTokens,
-  estOutputTokens,
-  fmt,
-  fmtTime,
-  type UsageData,
-  type UsageEntry,
-} from "@/components/usage/types";
+import { estInputTokens, estOutputTokens, fmt, type UsageData, type UsageEntry } from "@/components/usage/types";
 
-// Lazy-load: keeps @xyflow/react and recharts out of the initial bundle
-const PoolTopology = dynamic(() => import("@/components/usage/PoolTopology"), { ssr: false });
-const UsageChart = dynamic(() => import("@/components/usage/UsageChart"), { ssr: false });
-const AccountBarChart = dynamic(() => import("@/components/usage/AccountBarChart"), { ssr: false });
-const TopModelsChart = dynamic(() => import("@/components/usage/TopModelsChart"), { ssr: false });
-
-const MODEL_COLUMNS = [
-  { field: "rawModel", label: "Model" },
-  { field: "provider", label: "Account" },
-  { field: "requests", label: "Requests", align: "right" as const },
-  { field: "lastUsed", label: "Last Used", align: "right" as const },
+const RANGES = [
+  { value: "today", label: "Hôm nay" },
+  { value: "24h", label: "24 giờ" },
+  { value: "7d", label: "7 ngày" },
+  { value: "30d", label: "30 ngày" },
+  { value: "60d", label: "60 ngày" },
 ];
 
-const ACCOUNT_COLUMNS = [
-  { field: "accountName", label: "Account" },
-  { field: "rawModel", label: "Model" },
-  { field: "provider", label: "Source" },
-  { field: "requests", label: "Requests", align: "right" as const },
-  { field: "lastUsed", label: "Last Used", align: "right" as const },
+type GroupBy = "model" | "account" | "apiKey" | "endpoint";
+
+const GROUP_OPTIONS: { value: GroupBy; label: string; column: string }[] = [
+  { value: "model", label: "Model", column: "Model" },
+  { value: "account", label: "Tài khoản", column: "Tài khoản" },
+  { value: "apiKey", label: "API key", column: "API key" },
+  { value: "endpoint", label: "Endpoint", column: "Endpoint" },
 ];
 
-const API_KEY_COLUMNS = [
-  { field: "keyName", label: "API Key Name" },
-  { field: "rawModel", label: "Model" },
-  { field: "provider", label: "Account" },
-  { field: "requests", label: "Requests", align: "right" as const },
-  { field: "lastUsed", label: "Last Used", align: "right" as const },
-];
+interface Row {
+  key: string;
+  requests: number;
+  ok: number;
+  lastUsed: number;
+  inTok: number;
+  outTok: number;
+}
 
-const ENDPOINT_COLUMNS = [
-  { field: "endpoint", label: "Endpoint" },
-  { field: "rawModel", label: "Model" },
-  { field: "provider", label: "Account" },
-  { field: "requests", label: "Requests", align: "right" as const },
-  { field: "lastUsed", label: "Last Used", align: "right" as const },
-];
+// Compact counts for KPI values ("27.3k").
+function fmtCompact(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
-const TABLE_OPTIONS = [
-  { value: "model", label: "Usage by Model" },
-  { value: "account", label: "Usage by Account" },
-  { value: "apiKey", label: "Usage by API Key" },
-  { value: "endpoint", label: "Usage by Endpoint" },
-];
+const pct = (ok: number, total: number) => (total ? `${Math.round((ok / total) * 100)}%` : "—");
 
-// Aggregate recent entries by (groupKey, subKey); returns per-group items with
-// est token counts and lastUsed — mirrors 9router's groupDataByKey output.
-function aggregateRecent(
-  recent: UsageEntry[],
-  keyOf: (e: UsageEntry) => string,
-  itemOf: (e: UsageEntry) => { rawModel: string; provider: string }
-): UsageTableGroup[] {
-  const groups = new Map<string, Map<string, UsageTableItem>>();
+function groupRecent(recent: UsageEntry[], keyOf: (e: UsageEntry) => string): Row[] {
+  const rows = new Map<string, Row>();
   for (const e of recent) {
-    const gk = keyOf(e);
-    const { rawModel, provider } = itemOf(e);
-    const ik = `${rawModel}||${provider}`;
-    if (!groups.has(gk)) groups.set(gk, new Map());
-    const items = groups.get(gk)!;
-    const cur =
-      items.get(ik) ||
-      ({
-        key: ik,
-        rawModel,
-        provider,
-        requests: 0,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        lastUsed: null as number | null,
-        pending: 0,
-      } as UsageTableItem);
-    cur.requests += 1;
-    const inT = estInputTokens(e);
-    const outT = estOutputTokens(e);
-    cur.promptTokens = (cur.promptTokens || 0) + inT;
-    cur.completionTokens = (cur.completionTokens || 0) + outT;
-    cur.totalTokens = (cur.totalTokens || 0) + inT + outT;
-    if (!cur.lastUsed || e.ts > cur.lastUsed) cur.lastUsed = e.ts;
-    items.set(ik, cur);
+    const k = keyOf(e);
+    const r = rows.get(k) || { key: k, requests: 0, ok: 0, lastUsed: 0, inTok: 0, outTok: 0 };
+    r.requests++;
+    if (e.ok) r.ok++;
+    r.inTok += estInputTokens(e);
+    r.outTok += estOutputTokens(e);
+    if (e.ts > r.lastUsed) r.lastUsed = e.ts;
+    rows.set(k, r);
   }
-
-  return [...groups.entries()].map(([groupKey, items]) => {
-    const itemList = [...items.values()];
-    const summary: UsageTableItem = {
-      key: groupKey,
-      requests: itemList.reduce((s, i) => s + i.requests, 0),
-      promptTokens: itemList.reduce((s, i) => s + (i.promptTokens || 0), 0),
-      completionTokens: itemList.reduce((s, i) => s + (i.completionTokens || 0), 0),
-      totalTokens: itemList.reduce((s, i) => s + (i.totalTokens || 0), 0),
-      lastUsed: itemList.reduce<number | null>((m, i) => (i.lastUsed && (!m || i.lastUsed > m) ? i.lastUsed : m), null),
-      pending: 0,
-    };
-    return { groupKey, summary, items: itemList };
-  });
+  return [...rows.values()].sort((a, b) => b.requests - a.requests);
 }
 
-function sortGroups(groups: UsageTableGroup[], sortBy: string, sortOrder: "asc" | "desc"): UsageTableGroup[] {
-  return [...groups].sort((a, b) => {
-    let valA: string | number | null | undefined = a.groupKey;
-    let valB: string | number | null | undefined = b.groupKey;
-    if (sortBy !== "groupKey") {
-      valA = a.summary[sortBy] as string | number | null | undefined;
-      valB = b.summary[sortBy] as string | number | null | undefined;
-    }
-    if (typeof valA === "string") valA = valA.toLowerCase();
-    if (typeof valB === "string") valB = valB.toLowerCase();
-    if (valA == null) return 1;
-    if (valB == null) return -1;
-    if (valA < valB) return sortOrder === "asc" ? -1 : 1;
-    if (valA > valB) return sortOrder === "asc" ? 1 : -1;
-    return 0;
-  });
-}
-
-interface PoolAccountLite {
-  id: string;
-  name: string;
-  worker?: string;
-  status?: string;
-  enabled?: boolean;
-}
+const KEY_OF: Record<GroupBy, (e: UsageEntry) => string> = {
+  model: (e) => e.model || "—",
+  account: (e) => e.accountName || "—",
+  apiKey: (e) => e.keyName || "open",
+  endpoint: (e) => e.endpoint || "—",
+};
 
 export function UsageTab() {
+  const { t } = useT();
   const { maskEmails } = useApp();
   const [data, setData] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"overview" | "details">("overview");
-  const [period, setPeriod] = useState("today");
-  const [tableView, setTableView] = useState("model");
-  const [viewMode, setViewMode] = useState<"costs" | "tokens">("tokens");
-  const [sortBy, setSortBy] = useState("requests");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [period, setPeriod] = useState("7d");
+  const [groupBy, setGroupBy] = useState<GroupBy>("model");
   const isInitialLoad = useRef(true);
-  const [activeAccounts, setActiveAccounts] = useState<string[]>([]);
-  const [poolAccounts, setPoolAccounts] = useState<PoolAccountLite[]>([]);
-
-  // Display helper — masks account names when "Ẩn email" is on.
-  const showName = useCallback(
-    (name?: string | null) => maskName(name || "", maskEmails),
-    [maskEmails]
-  );
-
-  // Worker alias (w0..wN) + status, keyed by account id and name.
-  const workerById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const a of poolAccounts) if (a.worker) m.set(a.id, a.worker);
-    return m;
-  }, [poolAccounts]);
-  const busyCount = useMemo(
-    () => poolAccounts.filter((a) => a.status === "busy").length,
-    [poolAccounts]
-  );
 
   const refresh = useCallback(async (r: string, initial: boolean) => {
     if (initial) setLoading(true);
@@ -194,348 +97,273 @@ export function UsageTab() {
     const initial = isInitialLoad.current;
     isInitialLoad.current = false;
     refresh(period, initial);
-    const t = setInterval(() => refresh(period, false), 8000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => refresh(period, false), 8000);
+    return () => clearInterval(timer);
   }, [period, refresh]);
 
-  // Live "in-flight" edges for the topology: poll the lightweight pool state
-  // every 1.5s — busy accounts light their edge beam while a request runs.
-  useEffect(() => {
-    let dead = false;
-    const tick = async () => {
-      try {
-        const res = await fetch("/api/pool");
-        if (!res.ok) return;
-        const j = await res.json();
-        if (!dead) {
-          const accounts: PoolAccountLite[] = j.accounts || [];
-          setPoolAccounts(accounts);
-          setActiveAccounts(
-            accounts
-              .filter((a) => a.status === "busy")
-              .map((a) => a.name || "")
-              .filter(Boolean)
-          );
-        }
-      } catch {
-        /* keep last known state */
-      }
-    };
-    tick();
-    const t = setInterval(tick, 1500);
-    return () => {
-      dead = true;
-      clearInterval(t);
-    };
-  }, []);
-
-  const toggleSort = useCallback((_tableType: string, field: string) => {
-    if (sortBy === field) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("desc");
-    }
-  }, [sortBy]);
-
-  const activeTableConfig = useMemo(() => {
-    if (!data) return null;
-    const recent = data.recent || [];
-    switch (tableView) {
-      case "model": {
-        const groups = aggregateRecent(
-          recent,
-          (e) => e.model || "Unknown Model",
-          (e) => ({ rawModel: e.model || "Unknown Model", provider: e.accountName || "pool" })
-        );
-        return {
-          columns: MODEL_COLUMNS,
-          groupedData: sortGroups(groups, sortBy === "rawModel" ? "groupKey" : sortBy, sortOrder),
-          storageKey: "usage-stats:expanded-models",
-          emptyMessage: "No model usage in the recent window yet.",
-          renderSummaryCells: (group: UsageTableGroup) => (
-            <>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
-            </>
-          ),
-          renderDetailCells: (item: UsageTableItem) => (
-            <>
-              <td className="px-6 py-3 font-medium">{item.rawModel as string}</td>
-              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{showName(item.provider as string)}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
-            </>
-          ),
-        };
-      }
-      case "account": {
-        // Server aggregates for the whole range; per-model detail from recent.
-        const recentGroups = aggregateRecent(
-          recent,
-          (e) => e.accountName || "Unknown Account",
-          (e) => ({ rawModel: e.model || "Unknown Model", provider: "pool" })
-        );
-        const recentMap = new Map(recentGroups.map((g) => [g.groupKey, g.items]));
-        const groups: UsageTableGroup[] = (data.accounts || []).map((a) => {
-          const items = (recentMap.get(a.name) || []).map((i) => ({ ...i, accountName: a.name }));
-          const summary: UsageTableItem = {
-            key: a.name,
-            requests: a.requests,
-            promptTokens: items.length ? items.reduce((s, i) => s + (i.promptTokens || 0), 0) : undefined,
-            completionTokens: items.length ? items.reduce((s, i) => s + (i.completionTokens || 0), 0) : undefined,
-            totalTokens: items.length ? items.reduce((s, i) => s + (i.totalTokens || 0), 0) : undefined,
-            lastUsed: items.reduce<number | null>((m, i) => (i.lastUsed && (!m || i.lastUsed > m) ? i.lastUsed : m), null),
-            pending: 0,
-          };
-          return { groupKey: a.name, summary, items };
-        });
-        return {
-          columns: ACCOUNT_COLUMNS,
-          groupedData: sortGroups(groups, sortBy === "accountName" ? "groupKey" : sortBy, sortOrder),
-          storageKey: "usage-stats:expanded-accounts",
-          emptyMessage: "No account-specific usage recorded yet.",
-          renderSummaryCells: (group: UsageTableGroup) => (
-            <>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
-            </>
-          ),
-          renderDetailCells: (item: UsageTableItem) => (
-            <>
-              <td className="px-6 py-3 font-medium">{showName(item.accountName as string)}</td>
-              <td className="px-6 py-3 font-medium">{item.rawModel as string}</td>
-              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{item.provider as string}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
-            </>
-          ),
-        };
-      }
-      case "apiKey": {
-        const groups = aggregateRecent(
-          recent,
-          (e) => e.keyName || "open",
-          (e) => ({ rawModel: e.model || "Unknown Model", provider: e.accountName || "pool" })
-        ).map((g) => ({ ...g, items: g.items.map((i) => ({ ...i, keyName: g.groupKey })) }));
-        return {
-          columns: API_KEY_COLUMNS,
-          groupedData: sortGroups(groups, sortBy === "keyName" ? "groupKey" : sortBy, sortOrder),
-          storageKey: "usage-stats:expanded-apikeys",
-          emptyMessage: "No per-key usage in the recent window yet.",
-          renderSummaryCells: (group: UsageTableGroup) => (
-            <>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
-            </>
-          ),
-          renderDetailCells: (item: UsageTableItem) => (
-            <>
-              <td className="px-6 py-3 font-medium">{item.keyName as string}</td>
-              <td className="px-6 py-3 font-medium">{item.rawModel as string}</td>
-              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{showName(item.provider as string)}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
-            </>
-          ),
-        };
-      }
-      case "endpoint":
-      default: {
-        const groups = aggregateRecent(
-          recent,
-          (e) => e.endpoint || "unknown",
-          (e) => ({ rawModel: e.model || "Unknown Model", provider: e.accountName || "pool" })
-        ).map((g) => ({ ...g, items: g.items.map((i) => ({ ...i, endpoint: g.groupKey })) }));
-        return {
-          columns: ENDPOINT_COLUMNS,
-          groupedData: sortGroups(groups, sortBy === "endpoint" ? "groupKey" : sortBy, sortOrder),
-          storageKey: "usage-stats:expanded-endpoints",
-          emptyMessage: "No per-endpoint usage in the recent window yet.",
-          renderSummaryCells: (group: UsageTableGroup) => (
-            <>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-text-muted">—</td>
-              <td className="px-6 py-3 text-right">{fmt(group.summary.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(group.summary.lastUsed)}</td>
-            </>
-          ),
-          renderDetailCells: (item: UsageTableItem) => (
-            <>
-              <td className="px-6 py-3 font-mono font-medium">{item.endpoint as string}</td>
-              <td className="px-6 py-3 font-medium">{item.rawModel as string}</td>
-              <td className="px-6 py-3"><Badge variant="neutral" size="sm">{showName(item.provider as string)}</Badge></td>
-              <td className="px-6 py-3 text-right">{fmt(item.requests)}</td>
-              <td className="px-6 py-3 text-right text-text-muted whitespace-nowrap">{fmtTime(item.lastUsed)}</td>
-            </>
-          ),
-        };
-      }
-    }
-  }, [data, tableView, sortBy, sortOrder, showName]);
-
-  // Topology shows EVERY pool account — not only those with traffic — so a
-  // newly-added account appears as a node even before its first request.
-  const topologyAccounts = useMemo(() => {
-    const usageByName = new Map((data?.accounts || []).map((a) => [a.name, a.requests]));
-    const out: { name: string; count: number; label: string; worker?: string; status?: string; enabled?: boolean }[] = poolAccounts.map((a) => ({
-      name: a.name,
-      count: usageByName.get(a.name) || 0,
-      label: showName(a.name),
-      worker: a.worker,
-      status: a.status,
-      enabled: a.enabled !== false,
-    }));
-    // Accounts with usage history but no longer in the pool — keep them visible.
-    const poolNames = new Set(poolAccounts.map((a) => a.name));
-    const historyOnly = data?.graph?.accounts || data?.accounts?.map((a) => ({ name: a.name, count: a.requests })) || [];
-    for (const g of historyOnly) {
-      if (!poolNames.has(g.name)) {
-        out.push({ name: g.name, count: g.count, label: showName(g.name) });
-      }
-    }
-    return out;
-  }, [data, poolAccounts, showName]);
-
-  const spinner = (
-    <div className="flex items-center justify-center py-12 text-text-muted">
-      <span className="material-symbols-outlined text-[32px] animate-spin">progress_activity</span>
-    </div>
+  // "47 phút trước" — relative time for the detail table.
+  const ago = useCallback(
+    (ts: number) => {
+      if (!ts) return "—";
+      const mins = Math.floor((Date.now() - ts) / 60000);
+      if (mins < 1) return t("Vừa xong");
+      if (mins < 60) return t("{n} phút trước", { n: mins });
+      if (mins < 1440) return t("{n} giờ trước", { n: Math.floor(mins / 60) });
+      return new Date(ts).toLocaleDateString("vi-VN");
+    },
+    [t]
   );
 
-  const lastAccount = data?.recent?.[0]?.accountName || "";
-  const errorAccount = data?.recent?.[0] && !data.recent[0].ok ? data.recent[0].accountName : "";
+  const recent = useMemo(() => data?.recent || [], [data]);
+  const total = data?.totals.requests || 0;
+  // Model/key/endpoint numbers come from `recent`; flag when it is a sample.
+  const sampled = total > recent.length;
+
+  const kpis = useMemo(() => {
+    if (!data) return null;
+    const { totals } = data;
+    const today = data.days.length ? data.days[data.days.length - 1].requests : 0;
+    return [
+      { label: t("Request"), value: fmt(totals.requests), sub: t("{n} hôm nay", { n: fmt(today) }) },
+      {
+        label: t("Thành công"),
+        value: pct(totals.ok, totals.requests),
+        sub: t("{ok} xong · {failed} lỗi", { ok: fmt(totals.ok), failed: fmt(totals.failed) }),
+      },
+      {
+        label: t("Token"),
+        value: fmtCompact(totals.inputTokens + totals.outputTokens),
+        sub: t("{in} vào · {out} ra", { in: fmtCompact(totals.inputTokens), out: fmtCompact(totals.outputTokens) }),
+      },
+      { label: t("File đã tạo"), value: fmt(data.mediaFiles || 0), sub: t("ảnh & video đã lưu") },
+    ];
+  }, [data, t]);
+
+  const days = useMemo(() => {
+    const list = data?.days || [];
+    const max = Math.max(1, ...list.map((d) => d.requests));
+    return list.map((d, i) => ({
+      ...d,
+      failed: d.requests - d.ok,
+      okH: Math.round((d.ok / max) * 160),
+      failH: Math.round(((d.requests - d.ok) / max) * 160),
+      label: i === list.length - 1 ? t("Nay") : d.day.slice(3),
+      isToday: i === list.length - 1,
+    }));
+  }, [data, t]);
+
+  // Accounts: server-side over the whole range. Worker aliases (w0/w1) are
+  // deliberately not shown — the account name is what people recognise.
+  const byAccount = useMemo(
+    () =>
+      [...(data?.accounts || [])]
+        .sort((a, b) => b.requests - a.requests)
+        .map((a) => ({ key: a.id || a.name, name: maskName(a.name, maskEmails), requests: a.requests, ok: a.ok })),
+    [data, maskEmails]
+  );
+  const byModel = useMemo(
+    () => groupRecent(recent, KEY_OF.model).map((r) => ({ key: r.key, name: r.key, requests: r.requests, ok: r.ok })),
+    [recent]
+  );
+
+  const rows = useMemo(() => groupRecent(recent, KEY_OF[groupBy]), [recent, groupBy]);
+  const group = GROUP_OPTIONS.find((g) => g.value === groupBy)!;
+
+  const sampleNote = sampled ? t("Dựa trên {n} request gần nhất", { n: recent.length }) : null;
+
+  const breakdowns = [
+    { title: t("Theo tài khoản"), items: byAccount, note: null as string | null },
+    { title: t("Theo model"), items: byModel, note: sampleNote },
+  ];
 
   return (
-    <div className="ep9r flex min-w-0 flex-col gap-6 px-1 sm:px-0">
-      {/* Tabs + period selector on same row */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <SegmentedControl
-          options={[
-            { value: "overview", label: "Overview" },
-            { value: "details", label: "Details" },
-          ]}
-          value={activeTab}
-          onChange={(v) => setActiveTab(v as "overview" | "details")}
-          className="w-full sm:w-auto"
-        />
-        {activeTab === "overview" && (
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <SegmentedControl
-              options={USAGE_PERIODS}
-              value={period}
-              onChange={setPeriod}
-              size="sm"
-              className="w-full sm:w-auto"
-            />
-            <a
-              href={`/api/usage?range=${period}&format=csv`}
-              download
-              title="Tải lịch sử request dạng CSV"
-              className="apple-tool-btn"
-              style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}
-            >
-              ⬇ CSV
-            </a>
-          </div>
-        )}
-      </div>
-
-      {activeTab === "overview" && (
-        <div className="flex min-w-0 flex-col gap-6">
-          {/* Overview cards */}
-          {loading ? spinner : data && <OverviewCards stats={data} busyCount={busyCount} />}
-
-          {/* Pool topology + Recent Requests */}
-          {loading ? spinner : data && (
-            <div className="grid min-w-0 grid-cols-1 items-stretch gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
-              <PoolTopology
-                accounts={topologyAccounts}
-                activeAccounts={activeAccounts}
-                lastAccount={lastAccount}
-                errorAccount={errorAccount}
-              />
-              <RecentRequests requests={data.recent || []} workerById={workerById} showName={showName} />
-            </div>
-          )}
-
-          {/* Requests-over-time chart - synced period */}
-          {loading ? spinner : <UsageChart days={data?.days || []} />}
-
-          {/* Account and model breakdown charts */}
-          {!loading && data && (
-            <div className="grid min-w-0 grid-cols-1 gap-2 lg:grid-cols-2">
-              <AccountBarChart accounts={(data.accounts || []).map((a) => ({ ...a, name: showName(a.name) }))} />
-              <TopModelsChart recent={data.recent || []} />
-            </div>
-          )}
-
-          {/* Table with dropdown selector */}
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <select
-                value={tableView}
-                onChange={(e) => setTableView(e.target.value)}
-                className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
-                style={{ colorScheme: "auto" }}
+    <div className="act">
+      <HeaderSlot>
+        <div className="act-head-tools">
+          <div className="acc2-segment small act-range" role="group" aria-label={t("Khoảng thời gian")}>
+            {RANGES.map((r) => (
+              <button
+                key={r.value}
+                type="button"
+                className={period === r.value ? "active" : ""}
+                aria-pressed={period === r.value}
+                onClick={() => setPeriod(r.value)}
               >
-                {TABLE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <div className="grid grid-cols-2 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("costs")}
-                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === "costs" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
-                >
-                  Costs
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("tokens")}
-                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${viewMode === "tokens" ? "bg-primary text-white shadow-sm" : "text-text-muted hover:text-text hover:bg-bg-hover"}`}
-                >
-                  Tokens
-                </button>
-              </div>
-            </div>
-            {loading ? spinner : activeTableConfig && (
-              <UsageTable
-                title=""
-                columns={activeTableConfig.columns}
-                groupedData={activeTableConfig.groupedData}
-                formatGroupKey={tableView === "account" ? showName : undefined}
-                tableType={tableView}
-                sortBy={sortBy === "groupKey" ? "groupKey" : sortBy}
-                sortOrder={sortOrder}
-                onToggleSort={toggleSort}
-                viewMode={viewMode}
-                storageKey={activeTableConfig.storageKey}
-                renderSummaryCells={activeTableConfig.renderSummaryCells}
-                renderDetailCells={activeTableConfig.renderDetailCells}
-                emptyMessage={activeTableConfig.emptyMessage}
-              />
+                {t(r.label)}
+              </button>
+            ))}
+          </div>
+          <a
+            href={`/api/usage?range=${period}&format=csv`}
+            download
+            className="acc2-btn"
+            title={t("Tải lịch sử request dạng CSV")}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+            </svg>
+            {t("Tải CSV")}
+          </a>
+        </div>
+      </HeaderSlot>
+
+      {/* Range totals — one card, four columns */}
+      <section className="ov2-kpis" aria-label={t("Tổng quan khoảng thời gian")}>
+        {(kpis || [0, 1, 2, 3].map(() => null)).map((k, i) => (
+          <div key={i} className="ov2-kpi">
+            {k ? (
+              <>
+                <span className="ov2-muted">{k.label}</span>
+                <span className="ov2-kpi-value">{k.value}</span>
+                <span className="act-note">{k.sub}</span>
+              </>
+            ) : (
+              <>
+                <span className="skeleton" style={{ height: 14, width: "40%" }} />
+                <span className="skeleton" style={{ height: 34, width: "55%" }} />
+                <span className="skeleton" style={{ height: 12, width: "70%" }} />
+              </>
             )}
           </div>
-        </div>
-      )}
+        ))}
+      </section>
 
-      {activeTab === "details" && (
-        <Suspense fallback={spinner}>
-          <RequestDetailsTab
-            recent={data?.recent || []}
-            accounts={data?.accounts || []}
-            workerById={workerById}
-            showName={showName}
-          />
-        </Suspense>
-      )}
+      {/* Requests per day — stacked ok / failed */}
+      <section className="ov2-card act-card" aria-label={t("Request theo ngày")}>
+        <div className="ov2-section-head">
+          <h2>{t("Request theo ngày")}</h2>
+          <div className="act-legend">
+            <span><span className="act-swatch ok" />{t("Thành công")}</span>
+            <span><span className="act-swatch fail" />{t("Lỗi")}</span>
+          </div>
+        </div>
+        {loading && !data ? (
+          <div className="skeleton" style={{ height: 200 }} />
+        ) : (
+          <div
+            className="act-bars"
+            role="img"
+            aria-label={t("Biểu đồ cột chồng request thành công và lỗi theo ngày")}
+          >
+            {days.map((d) => (
+              <div
+                key={d.day}
+                className="act-bar-col"
+                title={t("{day}: {ok} thành công · {failed} lỗi", { day: d.day, ok: d.ok, failed: d.failed })}
+              >
+                <span className="act-bar-count">{d.requests}</span>
+                {d.requests ? (
+                  <div className="act-bar">
+                    {d.failH > 0 && <div className="fail" style={{ height: Math.max(2, d.failH) }} />}
+                    {d.okH > 0 && <div className="ok" style={{ height: Math.max(2, d.okH) }} />}
+                  </div>
+                ) : (
+                  <div className="act-bar empty" />
+                )}
+                <span className={`act-bar-day ${d.isToday ? "today" : ""}`}>{d.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Breakdowns — by account (whole range), by model (recent window) */}
+      <div className="act-grid2">
+        {breakdowns.map((b) => {
+          const max = Math.max(1, ...b.items.map((i) => i.requests));
+          return (
+            <section key={b.title} className="ov2-card act-card" aria-label={b.title}>
+              <div className="ov2-section-head">
+                <h2>{b.title}</h2>
+                {b.note && <span className="act-note">{b.note}</span>}
+              </div>
+              {loading && !data ? (
+                <>
+                  <div className="skeleton" style={{ height: 30 }} />
+                  <div className="skeleton" style={{ height: 30 }} />
+                </>
+              ) : b.items.length === 0 ? (
+                <div className="act-empty">{t("Chưa có request trong khoảng này")}</div>
+              ) : (
+                b.items.map((i) => (
+                  <div key={i.key} className="act-meter">
+                    <div className="act-meter-row">
+                      <span title={i.name}>{i.name}</span>
+                      <span>
+                        {t("{n} request", { n: fmt(i.requests) })} · {pct(i.ok, i.requests)}
+                      </span>
+                    </div>
+                    <div className="act-meter-track">
+                      <div className="act-meter-fill" style={{ width: `${(i.requests / max) * 100}%` }} />
+                    </div>
+                  </div>
+                ))
+              )}
+            </section>
+          );
+        })}
+      </div>
+
+      {/* Detail table, grouped by the selected dimension */}
+      <section className="acc2-card" aria-label={t("Chi tiết")}>
+        <div className="act-table-head">
+          <div>
+            <h2>{t("Chi tiết")}</h2>
+            {sampleNote && <div className="act-note">{sampleNote}</div>}
+          </div>
+          <label className="act-select-label">
+            {t("Nhóm theo")}
+            <select className="act-select" value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
+              {GROUP_OPTIONS.map((g) => (
+                <option key={g.value} value={g.value}>{t(g.label)}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="acc2-scroll">
+          <table className="acc2-table">
+            <thead>
+              <tr>
+                <th>{t(group.column)}</th>
+                <th className="num">{t("Request")}</th>
+                <th className="num">{t("Thành công")}</th>
+                <th>{t("Dùng lần cuối")}</th>
+                <th className="num">{t("Token vào")}</th>
+                <th className="num">{t("Token ra")}</th>
+                <th className="num">{t("Tổng token")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && !data ? (
+                <tr>
+                  <td colSpan={7}><div className="skeleton" style={{ height: 18 }} /></td>
+                </tr>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="act-empty">{t("Chưa có request trong khoảng này")}</td>
+                </tr>
+              ) : (
+                rows.map((r) => {
+                  const name = groupBy === "account" ? maskName(r.key, maskEmails) : r.key;
+                  return (
+                    <tr key={r.key}>
+                      <td className={`act-name ${groupBy === "endpoint" ? "mono" : ""}`} title={name}>
+                        {name}
+                      </td>
+                      <td className="num">{fmt(r.requests)}</td>
+                      <td className="num">{pct(r.ok, r.requests)}</td>
+                      <td className="act-sub">{ago(r.lastUsed)}</td>
+                      <td className="num act-sub">{fmt(r.inTok)}</td>
+                      <td className="num act-sub">{fmt(r.outTok)}</td>
+                      <td className="num">{fmt(r.inTok + r.outTok)}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }

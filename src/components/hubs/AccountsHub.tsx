@@ -23,16 +23,9 @@ export function AccountsHub({ initialTab }: { initialTab?: string }) {
         ]}
       />
       {tab === 'accounts' && <AccountsList />}
-      {tab === 'pool' && (
-        <section className="router-page-card">
-          <QuotaTab />
-        </section>
-      )}
-      {tab === 'combos' && (
-        <section className="router-page-card">
-          <CombosTab onCopyText={copyText} />
-        </section>
-      )}
+      {/* Quota & Combos draw their own cards — no router-page-card wrapper. */}
+      {tab === 'pool' && <QuotaTab />}
+      {tab === 'combos' && <CombosTab onCopyText={copyText} />}
     </>
   );
 }

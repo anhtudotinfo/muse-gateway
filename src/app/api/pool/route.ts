@@ -23,7 +23,7 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
 
-    if (body.strategy === 'fallback' || body.strategy === 'round-robin') {
+    if (body.strategy === 'fallback' || body.strategy === 'round-robin' || body.strategy === 'fusion') {
       musePool.setStrategy(body.strategy);
     }
     if (typeof body.accountId === 'string') {
