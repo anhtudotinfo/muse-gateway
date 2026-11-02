@@ -5,6 +5,7 @@ import { useApp } from '@/components/AppShell';
 import { ActionsMenu } from '@/components/ActionsMenu';
 import { maskName } from '@/lib/mask';
 import type { Profile } from '@/types';
+import type { PoolAccountView } from '@/lib/musePool';
 
 interface ProfilesTabProps {
   profiles: Profile[];
@@ -63,6 +64,39 @@ export function ProfilesTab({
   const [restoring, setRestoring] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const backupRef = useRef<HTMLInputElement>(null);
+  // Pool side of each account (cooldown, in-flight, request count) so one
+  // card answers "can this account take work?" without the Pool tab.
+  const [pool, setPool] = useState<Record<string, PoolAccountView>>({});
+
+  const loadPool = async () => {
+    try {
+      const j = await fetch('/api/pool').then((r) => r.json());
+      const map: Record<string, PoolAccountView> = {};
+      for (const a of j.accounts || []) map[a.id] = a;
+      setPool(map);
+    } catch {}
+  };
+
+  useEffect(() => {
+    void loadPool();
+    const timer = setInterval(() => void loadPool(), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const patchPool = async (body: Record<string, unknown>, done: string) => {
+    try {
+      const res = await fetch('/api/pool', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(res.statusText);
+      toast(done, 'success');
+      void loadPool();
+    } catch (e: any) {
+      toast('Lỗi cập nhật pool: ' + (e?.message || e), 'error');
+    }
+  };
 
   useEffect(() => {
     fetch('/api/settings')
@@ -316,6 +350,28 @@ export function ProfilesTab({
                   <span className={`ov-status-chip ${badge.cls}`}>{badge.label}</span>
                 </div>
 
+                {pool[p.id] && (() => {
+                  const a = pool[p.id];
+                  const state = !a.enabled
+                    ? { cls: 'off', label: 'Tắt trong pool' }
+                    : a.cooldownRemainingMs > 0
+                      ? { cls: 'failed', label: `Cooldown ${Math.ceil(a.cooldownRemainingMs / 60000)} phút` }
+                      : a.status === 'busy'
+                        ? { cls: 'running', label: 'Đang gửi' }
+                        : { cls: 'done', label: 'Nhận request' };
+                  const busyLanes = a.lanes?.lanes.filter((l) => l.busy).length ?? 0;
+                  return (
+                    <div className="acc-pool-row">
+                      <span className={`acc-pool-state ${state.cls}`}>{state.label}</span>
+                      <span>{a.totalRequests} request</span>
+                      {busyLanes > 0 && <span>{busyLanes} luồng đang chạy</span>}
+                      {a.lastError && a.failCount > 0 && (
+                        <span className="acc-pool-error" title={a.lastError}>{a.lastError}</span>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="acc-meta-row">
                   <span>{count} cookies</span>
                   <span>·</span>
@@ -368,6 +424,16 @@ export function ProfilesTab({
                       { label: 'Nạp vào ô nhập', onClick: () => onUseProfile(p) },
                       { label: 'Đổi tên…', onClick: () => onRenameProfile?.(p) },
                       { label: p.proxy ? 'Đổi proxy…' : 'Đặt proxy…', onClick: () => void setProxy(p) },
+                      ...(pool[p.id]
+                        ? [
+                            pool[p.id].enabled
+                              ? { label: 'Tạm tắt trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: false }, 'Đã tắt tài khoản trong pool') }
+                              : { label: 'Bật lại trong pool', onClick: () => void patchPool({ accountId: p.id, enabled: true }, 'Đã bật tài khoản trong pool') },
+                            ...(pool[p.id].cooldownRemainingMs > 0 || pool[p.id].failCount > 0
+                              ? [{ label: 'Xoá cooldown', onClick: () => void patchPool({ accountId: p.id, resetCooldown: true }, 'Đã xoá cooldown') }]
+                              : []),
+                          ]
+                        : []),
                       ...(onRelogin ? [{ label: 'Đăng nhập lại (trình duyệt)', onClick: () => onRelogin(p) }] : []),
                       { label: 'Xóa tài khoản', danger: true, onClick: () => onDeleteProfile(p.id, p.name) },
                     ]}

@@ -54,6 +54,6 @@ export async function GET() {
     },
     keys: { count: apiKeyService.list().length, authRequired: apiKeyService.authRequired },
     days,
-    recent: [...history].reverse().slice(0, 6),
+    recent: [...history].reverse().slice(0, 8),
   });
 }

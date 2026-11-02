@@ -1,26 +1,7 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { SettingsTab } from '@/components/tabs/SettingsTab';
-import { ToolsTab } from '@/components/tabs/ToolsTab';
-import { useApp } from '@/components/AppShell';
-
-export default function SettingsPage() {
-  const { bookmarkletHref, consoleScript, parsedEntries, copyText } = useApp();
-
-  return (
-    <>
-      <section className="router-page-card">
-        <SettingsTab />
-      </section>
-      <section className="router-page-card" style={{ marginTop: 16 }}>
-        <ToolsTab
-          bookmarkletHref={bookmarkletHref}
-          consoleScript={consoleScript}
-          parsedEntries={parsedEntries}
-          extensionPath={'d:\\Workspace\\04_Tools-Agents\\muse\\extension'}
-          onCopyText={copyText}
-        />
-      </section>
-    </>
-  );
+// Settings was dropped; the license has its own page. Keep old links working.
+export default async function Page({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const { tab } = await searchParams;
+  redirect(tab === 'license' ? '/license' : '/accounts');
 }

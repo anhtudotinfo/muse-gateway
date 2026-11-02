@@ -553,27 +553,3 @@ async function runLoginCapture(
     } catch { /* window may already be gone */ }
   }
 }
-
-export function generateBookmarklet(cookies: string): { bookmarkletUrl: string; consoleScript: string } {
-  const map = parseCookieString(cookies);
-  const entries = Object.entries(map);
-
-  const jsLines = entries.map(([k, v]) => {
-    return `document.cookie = "${encodeURIComponent(k)}=${encodeURIComponent(v)}; domain=.muse.ai; path=/; max-age=31536000; SameSite=Lax; Secure";`;
-  });
-
-  const fullScript = `(function(){
-  if (!location.hostname.includes('muse.ai')) {
-    alert('Vui lòng mở trang https://muse.ai trước khi nhấn Bookmarklet này!');
-    location.href = 'https://muse.ai';
-    return;
-  }
-  ${jsLines.join('\n  ')}
-  alert('Đã inject ${entries.length} cookies thành công! Trang sẽ được làm mới ngay.');
-  location.reload();
-})();`;
-
-  const bookmarkletUrl = 'javascript:' + encodeURIComponent(fullScript.replace(/\n\s*/g, ' '));
-
-  return { bookmarkletUrl, consoleScript: fullScript };
-}

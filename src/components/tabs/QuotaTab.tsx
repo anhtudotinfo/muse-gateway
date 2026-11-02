@@ -138,7 +138,20 @@ export function QuotaTab() {
   return (
     <div className="tab-surface">
       <div className="tab-top-caption">
-        <span className="caption-text">Trạng thái quota/cooldown từng tài khoản — giống Quota Tracker của 9Router.</span>
+        <span className="caption-text">Trạng thái quota/cooldown từng tài khoản và cách pool chia request.</span>
+        <div className="apple-segmented-control" title="Cách pool chọn account cho mỗi request.">
+          {(['round-robin', 'fallback'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`segment-item ${state?.strategy === s ? 'selected' : ''}`}
+              disabled={!state}
+              onClick={() => state?.strategy !== s && patch({ strategy: s })}
+            >
+              {s === 'round-robin' ? 'Round-robin' : 'Fallback'}
+            </button>
+          ))}
+        </div>
         <label
           title="Số luồng (tab) tối đa mỗi tài khoản — mỗi lane lái một Muse thread riêng, N lanes = N gen song song trên cùng 1 account"
           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-secondary)' }}
@@ -163,7 +176,7 @@ export function QuotaTab() {
       <div className="apple-profiles-stack">
         {accounts.length === 0 && (
           <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-tertiary)' }}>
-            Chưa có tài khoản nào.
+            {state ? 'Chưa có tài khoản nào.' : 'Đang tải…'}
           </div>
         )}
 

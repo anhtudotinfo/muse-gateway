@@ -26,10 +26,7 @@ interface AppContextValue {
   cookieInput: string;
   setCookieInput: (v: string) => void;
   parsedMap: CookieMap;
-  parsedEntries: [string, string][];
   cookieCount: number;
-  bookmarkletHref: string;
-  consoleScript: string;
   profiles: Profile[];
   reloadProfiles: () => Promise<Profile[]>;
   selectedBrowser: 'chrome' | 'edge';
@@ -50,14 +47,11 @@ export function useApp(): AppContextValue {
 }
 
 const PAGE_META: Record<string, { title: string; subtitle: string }> = {
-  '/': { title: 'Overview', subtitle: 'Tổng quan pool + endpoint & API keys — trỏ client OpenAI-compatible vào đây' },
-  '/accounts': { title: 'Accounts', subtitle: 'Quản lý phiên đăng nhập Muse — lưu nhiều tài khoản' },
-  '/combos': { title: 'Combos', subtitle: 'Gom account theo model — fallback / round-robin / fusion' },
-  '/usage': { title: 'Usage', subtitle: 'Thống kê request đi qua pool' },
-  '/tasks': { title: 'Tasks', subtitle: 'Ảnh và video tạo qua gateway' },
-  '/quota': { title: 'Quota Tracker', subtitle: 'Trạng thái quota & cooldown từng tài khoản' },
-  '/console': { title: 'Console Log', subtitle: 'Log realtime từ driver & pool' },
-  '/settings': { title: 'Settings', subtitle: 'Cấu hình runtime & dữ liệu · Công cụ (bookmarklet, extension, token inspector, client config)' },
+  '/': { title: 'Overview', subtitle: 'Tình trạng gateway, kết quả mới và hoạt động gần đây' },
+  '/media': { title: 'Images & videos', subtitle: 'Ảnh và video tạo qua gateway' },
+  '/accounts': { title: 'Accounts', subtitle: 'Phiên đăng nhập Muse, hạn mức và cách pool chia request' },
+  '/connect': { title: 'Connect', subtitle: 'Endpoint, API key và cấu hình cho tool của bạn' },
+  '/activity': { title: 'Activity', subtitle: 'Thống kê request và log realtime từ driver & pool' },
   '/license': { title: 'Bản quyền', subtitle: 'License & đăng ký máy — key gắn với HWID' },
 };
 
@@ -90,8 +84,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     }).catch(() => {});
   }, []);
 
-  const { parsedMap, parsedEntries, cookieCount, bookmarkletHref, consoleScript } =
-    useCookieParser(cookieInput);
+  const { parsedMap, cookieCount } = useCookieParser(cookieInput);
 
   const reloadProfiles = useCallback(async () => {
     try {
@@ -175,10 +168,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       cookieInput,
       setCookieInput,
       parsedMap,
-      parsedEntries,
       cookieCount,
-      bookmarkletHref,
-      consoleScript,
       profiles,
       reloadProfiles,
       selectedBrowser,
@@ -194,10 +184,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       copyText,
       cookieInput,
       parsedMap,
-      parsedEntries,
       cookieCount,
-      bookmarkletHref,
-      consoleScript,
       profiles,
       reloadProfiles,
       selectedBrowser,
@@ -224,12 +211,20 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             </div>
             <button
               type="button"
-              className="apple-tool-btn"
+              className="icon-btn"
               onClick={() => setMaskEmails(!maskEmails)}
-              title={t('Che email/tên tài khoản khỏi mọi màn hình')}
+              aria-pressed={maskEmails}
+              aria-label={t('Che email/tên tài khoản khỏi mọi màn hình')}
+              title={maskEmails ? t('Ẩn email: Bật') : t('Ẩn email: Tắt')}
               style={{ flexShrink: 0 }}
             >
-              {maskEmails ? `◐ ${t('Ẩn email: Bật')}` : `○ ${t('Ẩn email: Tắt')}`}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                {maskEmails ? (
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24M1 1l22 22" />
+                ) : (
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
+                )}
+              </svg>
             </button>
           </header>
           <UpdateBanner info={update} />

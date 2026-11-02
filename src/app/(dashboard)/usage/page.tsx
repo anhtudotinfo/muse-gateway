@@ -1,11 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { UsageTab } from '@/components/tabs/UsageTab';
-
-export default function UsagePage() {
-  return (
-    <section className="router-page-card">
-      <UsageTab />
-    </section>
-  );
+// Merged into Activity — keep the old link working.
+export default function Page() {
+  redirect('/activity');
 }

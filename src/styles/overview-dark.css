@@ -144,6 +144,105 @@
   .ov-tiles { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* ---- Redesigned overview: 4 KPIs, 2/3 + 1/3 rows ---- */
+.ov-tiles.ov-tiles-4 { grid-template-columns: repeat(4, 1fr); }
+
+.ov-grid-main {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.ov-endpoint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--apple-border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.ov-endpoint:hover { border-color: var(--apple-border-light); }
+.ov-endpoint code {
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin-top: 12px;
+  font-size: 0.74rem;
+  color: var(--text-tertiary);
+}
+.ov-kv dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.ov-media-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.ov-media-item {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--apple-border);
+}
+.ov-media-item:hover { border-color: var(--apple-border-light); }
+.ov-media-item img,
+.ov-media-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ov-media-dur {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1200px) {
+  .ov-tiles.ov-tiles-4 { grid-template-columns: repeat(2, 1fr); }
+  .ov-grid-main { grid-template-columns: 1fr; }
+}
+
 /* ==========================================================================
    Accounts page — compact input deck + account card grid
    ========================================================================== */
@@ -249,6 +348,34 @@
   color: var(--text-tertiary);
 }
 
+.acc-pool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  min-width: 0;
+}
+
+.acc-pool-state {
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+.acc-pool-state.done { color: var(--apple-green); background: var(--apple-green-dim); }
+.acc-pool-state.running { color: #67e8f9; background: rgba(103, 232, 249, 0.14); }
+.acc-pool-state.failed { color: var(--apple-red); background: var(--apple-red-dim); }
+.acc-pool-state.off { color: var(--text-tertiary); background: rgba(255, 255, 255, 0.06); }
+
+.acc-pool-error {
+  flex-basis: 100%;
+  color: var(--apple-red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .acc-card-actions {
   display: flex;
   gap: 6px;
@@ -299,3 +426,107 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ---- Overview v3: toolbar, delta tiles, unified feed ---- */
+.ov-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.ov-updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.74rem;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.ov-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ov-toolbar-actions a.apple-tool-btn { text-decoration: none; }
+
+.ov-tile-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.ov-delta {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.ov-delta.up { color: var(--apple-green); }
+.ov-delta.down { color: var(--apple-red); }
+
+.ov-axis {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+  font-size: 0.66rem;
+  color: var(--text-tertiary);
+}
+
+.ov-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 4px 20px;
+}
+.ov-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--apple-border);
+  min-width: 0;
+}
+.ov-feed-thumb,
+.ov-feed-icon {
+  position: relative;
+  flex-shrink: 0;
+  width: 64px;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--apple-border);
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ov-feed-thumb img,
+.ov-feed-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ov-feed-icon.ok { color: var(--text-tertiary); }
+.ov-feed-icon.fail { color: var(--apple-red); }
+.ov-feed-body { flex: 1; min-width: 0; }
+.ov-feed-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+.ov-feed-account { font-weight: 600; color: var(--text-primary); }
+.ov-feed-meta { color: var(--text-tertiary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.ov-feed-text {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov-feed-text.fail { color: var(--apple-red); }

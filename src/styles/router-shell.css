@@ -77,6 +77,7 @@
   text-align: left;
   transition: all 0.15s ease;
   font-family: inherit;
+  text-decoration: none;
 }
 
 .router-nav-item:hover {
@@ -404,3 +405,124 @@
     justify-content: center;
   }
 }
+
+/* ---- In-page tabs (Accounts / Activity / Settings) ---- */
+.page-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--apple-border);
+  overflow-x: auto;
+}
+
+.page-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.page-tab:hover {
+  color: var(--text-primary);
+}
+
+.page-tab.active {
+  color: #fb7185;
+  border-bottom-color: #fb7185;
+  font-weight: 600;
+}
+
+.page-tab-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-tertiary);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-tab.active .page-tab-badge {
+  background: rgba(251, 113, 133, 0.16);
+  color: #fb7185;
+}
+
+/* Icon-only header button (privacy toggle) */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--apple-border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--apple-border-light);
+}
+
+.icon-btn[aria-pressed='true'] {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, 0.35);
+}
+
+/* Loading placeholder */
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.sidebar-license {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--text-secondary);
+}
+
+.sidebar-license:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-license-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sidebar-license.ok .sidebar-license-dot { background: var(--apple-green); }
+.sidebar-license.warn { color: #fbbf24; }
+.sidebar-license.warn .sidebar-license-dot { background: #fbbf24; }
+.sidebar-license.active { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }

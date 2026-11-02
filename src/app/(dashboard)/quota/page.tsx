@@ -1,11 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { QuotaTab } from '@/components/tabs/QuotaTab';
-
-export default function QuotaPage() {
-  return (
-    <section className="router-page-card">
-      <QuotaTab />
-    </section>
-  );
+// Merged into Accounts — keep the old link working.
+export default function Page() {
+  redirect('/accounts?tab=pool');
 }

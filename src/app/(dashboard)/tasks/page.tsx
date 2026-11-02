@@ -1,11 +1,5 @@
-'use client';
-
-import { TasksTab } from '@/components/tabs/TasksTab';
+import { redirect } from 'next/navigation';
 
 export default function TasksPage() {
-  return (
-    <section className="router-page-card">
-      <TasksTab />
-    </section>
-  );
+  redirect('/media');
 }

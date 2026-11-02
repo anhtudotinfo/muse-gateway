@@ -1,10 +1,14 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Modal from '@/components/endpoint/ui/Modal';
 import Button from '@/components/endpoint/ui/Button';
 import { useT } from '@/lib/i18n';
+import { useApp } from '@/components/AppShell';
+import { maskName } from '@/lib/mask';
+import { MediaPreview, isVideo, localMediaUrl, type DashboardTask } from '@/components/tabs/MediaTab';
 
 interface OverviewData {
   strategy: string;
@@ -29,35 +33,35 @@ function fmtNum(n: number) {
   return String(n);
 }
 
-/** Tiny inline SVG sparkline — no deps, auto-scales, draws an area fill
- *  under the polyline. `values` is a per-day series; flat/zero data renders
- *  a baseline so the tile never looks broken. */
-function Sparkline({ values, color, height = 26 }: { values: number[]; color: string; height?: number }) {
-  const w = 96;
-  const h = height;
-  const max = Math.max(1, ...values);
-  const step = values.length > 1 ? w / (values.length - 1) : w;
-  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`);
-  const line = pts.join(' ');
-  const area = `0,${h} ${line} ${w},${h}`;
-  return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block', marginTop: 4 }}>
-      <polygon points={area} fill={color} opacity={0.15} />
-      <polyline points={line} fill="none" stroke={color} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
+/** Today vs yesterday as a signed percentage; null when there's no base. */
+function delta(today: number, yesterday: number): number | null {
+  if (!yesterday) return null;
+  return Math.round(((today - yesterday) / yesterday) * 100);
 }
 
+const STRATEGY_LABEL: Record<string, string> = {
+  'round-robin': 'Xoay đều',
+  fallback: 'Dự phòng theo thứ tự',
+  fusion: 'Chạy song song',
+};
+
+const RANGES = [7, 14] as const;
 const GUIDE_DISMISSED_KEY = 'muse_guide_dismissed';
+const RANGE_KEY = 'muse_overview_range';
 
 export function OverviewTab() {
   const router = useRouter();
   const { t } = useT();
+  const { copyText, maskEmails } = useApp();
   const [ov, setOv] = useState<OverviewData | null>(null);
   const [totals, setTotals] = useState<UsageTotals | null>(null);
   const [media, setMedia] = useState<{ total: number; days: number[] } | null>(null);
-  const [switching, setSwitching] = useState(false);
+  const [recentTasks, setRecentTasks] = useState<DashboardTask[]>([]);
+  const [origin, setOrigin] = useState('');
   const [showGuide, setShowGuide] = useState(false);
+  const [range, setRange] = useState<(typeof RANGES)[number]>(7);
+  const [updatedAt, setUpdatedAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
 
   const dismissGuide = useCallback(() => {
     try { localStorage.setItem(GUIDE_DISMISSED_KEY, '1'); } catch {}
@@ -72,51 +76,58 @@ export function OverviewTab() {
     if (!dismissed) setShowGuide(true);
   }, [ov]);
 
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    try {
+      if (localStorage.getItem(RANGE_KEY) === '14') setRange(14);
+    } catch {}
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, []);
+
+  const changeRange = (next: (typeof RANGES)[number]) => {
+    setRange(next);
+    try { localStorage.setItem(RANGE_KEY, String(next)); } catch {}
+  };
+
   const refresh = useCallback(async () => {
     try {
-      const [o, u] = await Promise.all([
+      const [o, u, tk] = await Promise.all([
         fetch('/api/overview').then((r) => r.json()),
         fetch('/api/usage?range=all').then((r) => r.json()),
+        fetch('/api/tasks?limit=24', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({})),
       ]);
+      setRecentTasks(Array.isArray(tk.tasks) ? tk.tasks : []);
       setOv(o);
       setTotals(u.totals || null);
       setMedia({
         total: u.mediaFiles || 0,
         days: Array.isArray(u.mediaDays) ? u.mediaDays.map((d: { count: number }) => d.count) : [],
       });
+      setUpdatedAt(Date.now());
     } catch {}
   }, []);
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
-  const setStrategy = useCallback(async (strategy: 'fallback' | 'round-robin') => {
-    if (strategy === ov?.strategy) return;
-    setSwitching(true);
-    try {
-      await fetch('/api/pool', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strategy }),
-      });
-      await refresh();
-    } catch {} finally {
-      setSwitching(false);
-    }
-  }, [ov?.strategy, refresh]);
-
   const rate = ov?.requests.successRate ?? 100;
-  const days = ov?.days || [];
-  const spark = (f: (d: (typeof days)[number]) => number) => days.map(f);
+  const allDays = ov?.days || [];
+  const days = allDays.slice(-range);
+  const today = allDays[allDays.length - 1];
+  const yesterday = allDays[allDays.length - 2];
+  const pct = (d?: { requests: number; ok: number }) => (d && d.requests ? Math.round((d.ok / d.requests) * 100) : 0);
+  const mediaToday = media?.days[media.days.length - 1] ?? 0;
+  const mediaYesterday = media?.days[media.days.length - 2] ?? 0;
 
   const GUIDE_STEPS: { icon: string; title: string; desc: string }[] = [
     {
       icon: 'person_add',
       title: t('Thêm tài khoản Muse'),
-      desc: t('Vào tab {tab} — dán cookies tài khoản đầu tiên bằng bookmarklet hoặc browser extension.', { tab: 'Accounts' }),
+      desc: t('Vào trang {tab} — đăng nhập Muse bằng trình duyệt hoặc dán cookie của tài khoản đầu tiên.', { tab: t('Accounts') }),
     },
     {
       icon: 'key',
@@ -126,31 +137,84 @@ export function OverviewTab() {
     {
       icon: 'vpn_key',
       title: t('Tạo API key & trỏ client'),
-      desc: t('Mục {muc} trên trang Overview — tạo key rồi trỏ client vào {url}.', { muc: 'API Keys', url: 'http://localhost:1412/v1' }),
+      desc: t('Vào trang {tab} — tạo key rồi trỏ client vào {url}.', { tab: t('Connect'), url: `${origin || 'http://localhost:1412'}/v1` }),
     },
   ];
 
-  const tiles: { label: string; value: string; color: string; sub: string; spark?: number[] }[] = [
-    { label: t('Tổng request'), value: totals ? fmtNum(totals.requests) : '—', color: '#fb7185', sub: `${ov?.requests.today ?? 0} ${t('hôm nay')}`, spark: spark((d) => d.requests) },
-    { label: t('Thành công'), value: totals ? fmtNum(totals.ok) : '—', color: '#4ade80', sub: t('request ok'), spark: spark((d) => d.ok) },
-    { label: t('Thất bại'), value: totals ? fmtNum(totals.failed) : '—', color: '#f87171', sub: totals?.requests ? `${Math.round(((totals.failed || 0) / totals.requests) * 100)}% ${t('tổng')}` : `0% ${t('tổng')}`, spark: spark((d) => d.requests - d.ok) },
-    { label: t('Media đã tạo'), value: media ? fmtNum(media.total) : '—', color: '#a78bfa', sub: t('file trong kho media'), spark: media?.days },
-    { label: t('Tỉ lệ thành công'), value: ov ? `${rate}%` : '—', color: '#fbbf24', sub: `${totals?.ok ?? 0}/${totals?.requests ?? 0} request`, spark: spark((d) => (d.requests ? Math.round((d.ok / d.requests) * 100) : 0)) },
-    { label: t('Latency TB'), value: ov?.requests.avgMs ? `${(ov.requests.avgMs / 1000).toFixed(1)}s` : '—', color: '#67e8f9', sub: t('mỗi request'), spark: spark((d) => d.avgMs) },
-    { label: t('Tổng account'), value: ov ? String(ov.accounts.total) : '—', color: '#fb7185', sub: `strategy ${ov?.strategy || '—'}` },
-    { label: t('Khả dụng'), value: ov ? String(ov.accounts.ready) : '—', color: '#4ade80', sub: t('sẵn sàng nhận request') },
-    { label: t('Lỗi / Hết hạn'), value: ov ? String(ov.accounts.cooldown) : '—', color: '#f87171', sub: 'cooldown / error' },
-    { label: t('Đã tắt'), value: ov ? String(ov.accounts.disabled) : '—', color: '#fbbf24', sub: 'disabled' },
-    { label: t('API keys'), value: ov ? String(ov.keys.count) : '—', color: '#e6e6f0', sub: ov?.keys.authRequired ? t('auth bắt buộc') : t('đang mở') },
-    { label: t('Tổng token'), value: totals ? fmtNum((totals.inputTokens || 0) + (totals.outputTokens || 0)) : '—', color: '#f472b6', sub: `${fmtNum(totals?.inputTokens || 0)} in · ${fmtNum(totals?.outputTokens || 0)} out` },
+  // Every tile has the same shape: value, today-vs-yesterday, one context line.
+  const tiles: { label: string; value: string; color: string; change: number | null; changeUnit?: string; sub: string }[] = [
+    {
+      label: t('Tổng request'),
+      value: totals ? fmtNum(totals.requests) : '',
+      color: 'var(--text-primary)',
+      change: delta(today?.requests ?? 0, yesterday?.requests ?? 0),
+      sub: `${ov?.requests.today ?? 0} ${t('hôm nay')} · ${fmtNum(totals?.failed ?? 0)} ${t('thất bại')}`,
+    },
+    {
+      label: t('Tỉ lệ thành công'),
+      value: ov ? `${rate}%` : '',
+      color: rate >= 90 ? '#4ade80' : rate >= 70 ? '#fbbf24' : '#f87171',
+      change: today?.requests && yesterday?.requests ? pct(today) - pct(yesterday) : null,
+      changeUnit: ` ${t('điểm')}`,
+      sub: ov?.requests.avgMs ? `${t('Latency TB')} ${(ov.requests.avgMs / 1000).toFixed(1)}s` : t('Chưa có request'),
+    },
+    {
+      label: t('Media đã tạo'),
+      value: media ? fmtNum(media.total) : '',
+      color: 'var(--text-primary)',
+      change: delta(mediaToday, mediaYesterday),
+      sub: `${mediaToday} ${t('hôm nay')}`,
+    },
+    {
+      label: t('Tài khoản sẵn sàng'),
+      value: ov ? `${ov.accounts.ready}/${ov.accounts.total}` : '',
+      color: ov && ov.accounts.total > 0 && ov.accounts.ready === 0 ? '#f87171' : 'var(--text-primary)',
+      change: null,
+      sub: ov ? `${ov.accounts.busy} ${t('đang gửi')} · ${ov.accounts.cooldown} cooldown · ${ov.accounts.disabled} ${t('tắt')}` : '',
+    },
   ];
+
+  const endpoint = origin ? `${origin}/v1` : '';
+  const running = recentTasks.filter((task) => task.status === 'running' || task.status === 'queued').length;
+
+  // One feed: each pool request, with the file it produced when there is one.
+  // A request and its task finish together, so match on finish time plus
+  // prompt, and give each file to one row only.
+  const used = new Set<string>();
+  const feed = (ov?.recent || []).map((r) => {
+    const task = r.ok
+      ? recentTasks.find(
+          (tk) =>
+            tk.url &&
+            !used.has(tk.id) &&
+            tk.finished_at !== null &&
+            Math.abs(tk.finished_at * 1000 - r.ts) < 15_000 &&
+            tk.prompt.startsWith(r.promptPreview.slice(0, 40)),
+        )
+      : undefined;
+    if (task) used.add(task.id);
+    return { ...r, task };
+  });
+
+  const ago = (ts: number) => {
+    const ms = now - ts;
+    if (ms < 60_000) return t('vừa xong');
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ${t('trước')}`;
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ${t('trước')}`;
+    return `${Math.floor(ms / 86_400_000)}d ${t('trước')}`;
+  };
 
   return (
     <div className="tab-surface">
-      <div className="tab-top-caption">
-        <span className="caption-text">{t('Tổng quan hệ thống — tự cập nhật mỗi 5s.')}</span>
-        <button type="button" className="apple-tool-btn" onClick={() => setShowGuide(true)}>{t('Hướng dẫn')}</button>
-        <button type="button" className="apple-tool-btn" onClick={refresh}>{t('Làm mới')}</button>
+      <div className="ov-toolbar">
+        <span className="ov-updated" aria-live="polite">
+          <span className="status-dot" />
+          {updatedAt ? t('Cập nhật {s} giây trước', { s: Math.max(0, Math.round((now - updatedAt) / 1000)) }) : t('Đang tải…')}
+        </span>
+        <div className="ov-toolbar-actions">
+          <button type="button" className="apple-tool-btn" onClick={() => setShowGuide(true)}>{t('Hướng dẫn')}</button>
+          <button type="button" className="apple-tool-btn" onClick={refresh}>{t('Làm mới')}</button>
+        </div>
       </div>
 
       <Modal
@@ -190,74 +254,63 @@ export function OverviewTab() {
         </div>
       </Modal>
 
-      <div className="ov-tiles">
+      <div className="ov-tiles ov-tiles-4">
         {tiles.map((tile) => (
           <div key={tile.label} className="ov-tile">
             <div className="ov-tile-label">{tile.label}</div>
-            <div className="ov-tile-value" style={{ color: tile.color }}>{tile.value}</div>
-            {tile.spark && <Sparkline values={tile.spark} color={tile.color} />}
-            <div className="ov-tile-sub">{tile.sub}</div>
+            {tile.value ? (
+              <div className="ov-tile-row">
+                <span className="ov-tile-value" style={{ color: tile.color }}>{tile.value}</span>
+                {tile.change !== null && (
+                  <span
+                    className={`ov-delta ${tile.change > 0 ? 'up' : tile.change < 0 ? 'down' : ''}`}
+                    title={t('So với hôm qua')}
+                  >
+                    {tile.change > 0 ? '▲' : tile.change < 0 ? '▼' : '•'} {Math.abs(tile.change)}
+                    {tile.changeUnit ?? '%'}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="skeleton" style={{ height: 26, width: '55%', margin: '2px 0' }} />
+            )}
+            <div className="ov-tile-sub">{tile.sub || ' '}</div>
           </div>
         ))}
       </div>
 
-      <div className="ov-sys-grid">
-        {/* Pool strategy card */}
+      <div className="ov-grid-main">
+        {/* Request volume (area) + success rate (dashed line) */}
         <div className="ov-card">
           <div className="ov-card-head">
             <div>
-              <div className="ov-card-title">{t('Pool Strategy')}</div>
-              <div className="ov-card-desc">{t('Cách pool chọn account cho mỗi request.')}</div>
-            </div>
-          </div>
-          {/* Content fills the stretched card height — centers instead of
-              leaving dead space at the bottom. */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 14 }}>
-            <div className="apple-segmented-control" style={{ alignSelf: 'stretch' }}>
-              <button
-                type="button"
-                className={`segment-item ${ov?.strategy === 'round-robin' ? 'selected' : ''}`}
-                style={{ flex: 1 }}
-                disabled={switching}
-                onClick={() => setStrategy('round-robin')}
-              >
-                Round-robin
-              </button>
-              <button
-                type="button"
-                className={`segment-item ${ov?.strategy === 'fallback' ? 'selected' : ''}`}
-                style={{ flex: 1 }}
-                disabled={switching}
-                onClick={() => setStrategy('fallback')}
-              >
-                Fallback
-              </button>
-            </div>
-            <div className="ov-sys-meta" style={{ marginTop: 0 }}>
-              <span><b style={{ color: 'var(--apple-green)' }}>{ov?.accounts.ready ?? 0}</b> {t('sẵn sàng')}</span>
-              <span><b style={{ color: '#fb7185' }}>{ov?.accounts.busy ?? 0}</b> {t('busy')}</span>
-              <span><b style={{ color: 'var(--apple-red)' }}>{ov?.accounts.cooldown ?? 0}</b> {t('cooldown')}</span>
-              <span><b style={{ color: 'var(--text-tertiary)' }}>{ov?.accounts.disabled ?? 0}</b> {t('tắt')}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 14-day requests chart — request volume (area) + success rate (line) */}
-        <div className="ov-card">
-          <div className="ov-card-head">
-            <div>
-              <div className="ov-card-title">{t('Requests 14 ngày')}</div>
+              <div className="ov-card-title">{t('Request theo ngày')}</div>
               <div className="ov-card-desc">
                 <span style={{ color: '#fb7185' }}>●</span> {t('request/ngày')} ·{' '}
                 <span style={{ color: '#4ade80' }}>●</span> {t('tỷ lệ thành công')}
               </div>
             </div>
+            <div className="apple-segmented-control" role="group" aria-label={t('Khoảng thời gian')}>
+              {RANGES.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className={`segment-item ${range === r ? 'selected' : ''}`}
+                  aria-pressed={range === r}
+                  onClick={() => changeRange(r)}
+                >
+                  {t('{n} ngày', { n: r })}
+                </button>
+              ))}
+            </div>
           </div>
-          {days.length ? (
+          {!ov ? (
+            <div className="skeleton" style={{ flex: 1, minHeight: 130 }} />
+          ) : days.some((d) => d.requests) ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <svg width="100%" height="110" viewBox="0 0 560 110" preserveAspectRatio="none">
+              <svg width="100%" height="130" viewBox="0 0 560 130" preserveAspectRatio="none" role="img" aria-label={t('Biểu đồ request theo ngày')}>
                 {(() => {
-                  const w = 560, h = 110, pad = 6;
+                  const w = 560, h = 130, pad = 6;
                   const maxR = Math.max(1, ...days.map((d) => d.requests));
                   const step = days.length > 1 ? (w - pad * 2) / (days.length - 1) : w;
                   const rx = (i: number) => pad + i * step;
@@ -273,69 +326,109 @@ export function OverviewTab() {
                       <polyline points={okPts} fill="none" stroke="#4ade80" strokeWidth={1.5} strokeDasharray="4 3" strokeLinejoin="round" />
                       {days.map((d, i) => (
                         <g key={d.day}>
-                          <circle cx={rx(i)} cy={ry(d.requests)} r={2.4} fill="#fb7185" />
-                          <title>{`${d.day}: ${d.requests} requests · ${d.requests ? Math.round((d.ok / d.requests) * 100) : 0}% ok · avg ${(d.avgMs / 1000).toFixed(1)}s`}</title>
+                          <circle cx={rx(i)} cy={ry(d.requests)} r={2.6} fill="#fb7185" />
+                          <title>{`${d.day}: ${d.requests} request · ${pct(d)}% ok · ${(d.avgMs / 1000).toFixed(1)}s`}</title>
                         </g>
                       ))}
                     </>
                   );
                 })()}
               </svg>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.62rem', color: 'var(--text-quaternary)', padding: '0 4px' }}>
+              <div className="ov-axis">
                 {days.map((d, i) => (
-                  <span key={d.day} style={{ visibility: i % 2 === 0 ? 'visible' : 'hidden' }}>{d.day.slice(3)}</span>
+                  <span key={d.day} style={{ visibility: range === 7 || i % 2 === 0 ? 'visible' : 'hidden' }}>{d.day.slice(3)}</span>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="ov-empty">{t('Chưa có dữ liệu.')}</div>
+            <div className="ov-empty">{t('Chưa có request trong {n} ngày qua.', { n: range })}</div>
           )}
         </div>
 
-        {/* Recent activity feed */}
+        {/* Gateway status — where to point tools, and whether the pool can serve */}
         <div className="ov-card">
           <div className="ov-card-head">
             <div>
-              <div className="ov-card-title">{t('Hoạt động gần đây')}</div>
-              <div className="ov-card-desc">{t('Request mới nhất qua pool.')}</div>
+              <div className="ov-card-title">{t('Gateway')}</div>
+              <div className="ov-card-desc">{t('Trỏ tool OpenAI-compatible vào endpoint này.')}</div>
             </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, flex: 1, justifyContent: 'center' }}>
-            {(ov?.recent || []).length ? (
-              ov!.recent!.slice(0, 4).map((r, i) => {
-                const ago = Date.now() - r.ts;
-                const agoText = ago < 60_000 ? t('vừa xong') : ago < 3600_000 ? `${Math.floor(ago / 60_000)}m ${t('trước')}` : ago < 86400_000 ? `${Math.floor(ago / 3600_000)}h ${t('trước')}` : `${Math.floor(ago / 86400_000)}d ${t('trước')}`;
-                return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.72rem', minWidth: 0 }}>
-                    <span
-                      title={r.ok ? t('Thành công') : r.error || t('Thất bại')}
-                      style={{
-                        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                        background: r.ok ? '#4ade80' : '#f87171',
-                        boxShadow: `0 0 6px ${r.ok ? '#4ade80' : '#f87171'}66`,
-                      }}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                        <span style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {r.accountName}
-                        </span>
-                        <span style={{ color: 'var(--text-quaternary)', flexShrink: 0 }}>
-                          {(r.ms / 1000).toFixed(1)}s · {agoText}
-                        </span>
-                      </div>
-                      <div style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.error || r.promptPreview}>
-                        {r.ok ? (r.promptPreview || '(empty prompt)') : `✕ ${r.error || r.promptPreview || t('thất bại')}`}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="ov-empty" style={{ alignSelf: 'center' }}>{t('Chưa có request nào.')}</div>
+            {ov && (
+              <span className={`ov-status-chip ${ov.accounts.ready > 0 ? 'done' : 'failed'}`}>
+                {ov.accounts.ready > 0 ? t('Sẵn sàng') : t('Chưa sẵn sàng')}
+              </span>
             )}
           </div>
+          <button
+            type="button"
+            className="ov-endpoint"
+            onClick={() => endpoint && copyText(endpoint, 'Endpoint')}
+            aria-label={t('Sao chép endpoint')}
+          >
+            <code>{endpoint || '—'}</code>
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden="true">content_copy</span>
+          </button>
+          <dl className="ov-kv">
+            <dt>{t('Tài khoản')}</dt>
+            <dd>{ov ? `${ov.accounts.ready} ${t('sẵn sàng')} · ${ov.accounts.busy} ${t('đang gửi')}` : '—'}</dd>
+            <dt>{t('Chiến lược')}</dt>
+            <dd>{ov ? t(STRATEGY_LABEL[ov.strategy] || ov.strategy) : '—'}</dd>
+            <dt>API keys</dt>
+            <dd>{ov ? `${ov.keys.count} · ${ov.keys.authRequired ? t('bắt buộc key') : t('không cần key')}` : '—'}</dd>
+          </dl>
+          <div className="ov-card-actions">
+            <button type="button" className="apple-tool-btn" onClick={() => router.push('/connect')}>{t('Kết nối & API key')}</button>
+            <button type="button" className="apple-tool-btn" onClick={() => router.push('/accounts?tab=pool')}>{t('Quản lý pool')}</button>
+          </div>
         </div>
+      </div>
+
+      {/* Recent activity — requests and the files they made, in one list */}
+      <div className="ov-card">
+        <div className="ov-card-head">
+          <div>
+            <div className="ov-card-title">{t('Hoạt động gần đây')}</div>
+            <div className="ov-card-desc">
+              {running > 0 ? t('{n} tác vụ đang chạy', { n: running }) : t('Request mới nhất qua pool.')}
+            </div>
+          </div>
+          <div className="ov-toolbar-actions">
+            <Link href="/media" className="apple-tool-btn">{t('Ảnh & video')}</Link>
+            <Link href="/activity" className="apple-tool-btn">{t('Xem tất cả')}</Link>
+          </div>
+        </div>
+        {!ov ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[0, 1, 2].map((i) => <div key={i} className="skeleton" style={{ height: 44 }} />)}
+          </div>
+        ) : feed.length ? (
+          <ul className="ov-feed">
+            {feed.map((r, i) => (
+              <li key={`${r.ts}-${i}`} className="ov-feed-row">
+                {r.task ? (
+                  <a href={localMediaUrl(r.task.url!)} target="_blank" rel="noreferrer" className="ov-feed-thumb" aria-label={t('Mở file')}>
+                    <MediaPreview task={r.task} />
+                    {isVideo(r.task) && r.task.duration_sec ? <span className="ov-media-dur">{Math.round(r.task.duration_sec)}s</span> : null}
+                  </a>
+                ) : (
+                  <span className={`ov-feed-icon ${r.ok ? 'ok' : 'fail'}`} aria-hidden="true">
+                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>{r.ok ? 'chat' : 'error'}</span>
+                  </span>
+                )}
+                <div className="ov-feed-body">
+                  <div className="ov-feed-top">
+                    <span className="ov-feed-account">{maskName(r.accountName, maskEmails)}</span>
+                    <span className="ov-feed-meta">{(r.ms / 1000).toFixed(1)}s · {ago(r.ts)}</span>
+                  </div>
+                  <div className={`ov-feed-text ${r.ok ? '' : 'fail'}`} title={r.error || r.promptPreview}>
+                    {r.ok ? r.promptPreview || t('(prompt trống)') : `${t('Lỗi')}: ${r.error || r.promptPreview || t('thất bại')}`}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="ov-empty">{t('Chưa có request nào.')}</div>
+        )}
       </div>
     </div>
   );

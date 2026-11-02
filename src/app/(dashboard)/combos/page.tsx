@@ -1,13 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { CombosTab } from '@/components/tabs/CombosTab';
-import { useApp } from '@/components/AppShell';
-
-export default function CombosPage() {
-  const { copyText } = useApp();
-  return (
-    <section className="router-page-card">
-      <CombosTab onCopyText={copyText} />
-    </section>
-  );
+// Merged into Accounts — keep the old link working.
+export default function Page() {
+  redirect('/accounts?tab=combos');
 }

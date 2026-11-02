@@ -1,11 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { ConsoleLogTab } from '@/components/tabs/ConsoleLogTab';
-
-export default function ConsolePage() {
-  return (
-    <section className="router-page-card">
-      <ConsoleLogTab />
-    </section>
-  );
+// Merged into Activity — keep the old link working.
+export default function Page() {
+  redirect('/activity?tab=logs');
 }

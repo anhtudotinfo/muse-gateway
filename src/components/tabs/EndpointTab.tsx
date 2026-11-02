@@ -1175,7 +1175,7 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
           <div className="mt-4">
             <SecurityWarning
               message={unsafeReason}
-              action={{ label: 'Open settings', onClick: onOpenSettings }}
+              action={onOpenSettings ? { label: 'Open settings', onClick: onOpenSettings } : undefined}
             />
           </div>
         )}
@@ -1200,10 +1200,11 @@ export function EndpointTab({ onCopyText, onOpenSettings }: EndpointTabProps) {
                     ? 'Require login is disabled — anyone can access your dashboard via tunnel.'
                     : 'Dashboard uses the default password — change it in Profile settings.'
                 }
-                action={{
-                  label: !requireLogin ? 'Enable' : 'Change password',
-                  onClick: onOpenSettings,
-                }}
+                action={
+                  onOpenSettings
+                    ? { label: !requireLogin ? 'Enable' : 'Change password', onClick: onOpenSettings }
+                    : undefined
+                }
               />
             )}
           </div>
