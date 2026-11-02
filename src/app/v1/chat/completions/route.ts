@@ -6,6 +6,9 @@ import { extractPromptFromChatMessages } from '@/lib/promptExtractor';
 import { extractWorkspaceCwd } from '@/lib/toolBridge';
 import { licenseGate } from '@/lib/licenseGate';
 import { publicOrigin } from '@/lib/requestOrigin';
+import { collectImageRefs, ImageRefError, loadImageRefs } from '@/lib/imageRefs';
+import { withOrigin } from '@/lib/mediaResult';
+import type { ChatResult } from '@/lib/museDriver';
 import type { ChatCompletionRequest } from '@/types';
 
 const corsHeaders = {
@@ -64,25 +67,37 @@ export async function POST(req: NextRequest) {
     // Lấy tin nhắn user cuối, bỏ qua context envelopes do client inject
     const formattedPrompt = extractPromptFromChatMessages(messages);
 
-    // Multimodal parts on the last user message — image_url entries arrive as
-    // data: URLs and are attached to the Muse composer (frame bridging).
-    const images: string[] = [];
-    const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
-    if (Array.isArray(lastUser?.content)) {
-      for (const part of lastUser.content) {
-        const u =
-          (typeof part?.image_url === 'object' ? part.image_url?.url : part?.image_url) ||
-          (part?.type === 'input_image' ? part?.image_url : null);
-        if (typeof u === 'string' && u.startsWith('data:')) images.push(u);
-      }
-    }
-
     if (!formattedPrompt) {
       return NextResponse.json(
         { error: { message: 'Could not extract a user prompt from messages.', type: 'invalid_request_error' } },
         { status: 400, headers: corsHeaders }
       );
     }
+
+    // Multimodal parts on the last user message — image_url entries (data:
+    // or http URLs) are attached to the Muse composer (frame bridging).
+    const lastUser = [...messages].reverse().find((m: any) => m?.role === 'user');
+    let images: string[];
+    try {
+      images = await loadImageRefs(
+        collectImageRefs(lastUser?.content),
+        !isRemoteHeaders(req.headers)
+      );
+    } catch (err) {
+      if (!(err instanceof ImageRefError)) throw err;
+      return NextResponse.json(
+        { error: { message: err.message, type: 'invalid_request_error' } },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+    const durationSec = Number((body as any).duration ?? (body as any).duration_sec) || null;
+    const origin = publicOrigin(req);
+    const museMeta = (result: ChatResult) => ({
+      account_id: result.accountId ?? null,
+      thread_url: result.threadUrl ?? null,
+      media: (result.mediaInfo ?? []).map((item) => ({ ...item, url: withOrigin(item.url, origin) })),
+      partial: !!result.partial,
+    });
 
     const cwd = extractWorkspaceCwd(body);
     const keyName = apiKey === 'open' ? 'open' : apiKey.name;
@@ -116,12 +131,13 @@ export async function POST(req: NextRequest) {
             15_000,
           );
           try {
-            const { media, threadUrl, accountId } = await musePool.chat({
+            const result = await musePool.chat({
               prompt: formattedPrompt,
               images,
               signal: req.signal,
               cwd,
               model,
+              durationSec,
               ua,
               keyName,
               endpoint: '/v1/chat/completions',
@@ -147,6 +163,7 @@ export async function POST(req: NextRequest) {
               },
             });
             clearInterval(keepAlive);
+            const { media, threadUrl } = result;
 
             // Media attachments arrive after the reply completes — emit as a
             // final content delta so streaming clients see the links too.
@@ -157,7 +174,7 @@ export async function POST(req: NextRequest) {
                 object: 'chat.completion.chunk',
                 created,
                 model,
-                muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
+                muse: museMeta(result),
                 choices: [
                   {
                     index: 0,
@@ -165,7 +182,7 @@ export async function POST(req: NextRequest) {
                       content:
                         (media.length
                           ? '\n\nAttachments:\n' +
-                            media.map((u) => `- ${u.startsWith('http') ? u : publicOrigin(req) + u}`).join('\n')
+                            media.map((u) => `- ${withOrigin(u, origin)}`).join('\n')
                           : '') +
                         (threadUrl ? `\n\nThread: ${threadUrl}` : ''),
                     },
@@ -182,7 +199,7 @@ export async function POST(req: NextRequest) {
               object: 'chat.completion.chunk',
               created,
               model,
-              muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
+              muse: museMeta(result),
               choices: [
                 {
                   index: 0,
@@ -217,12 +234,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Handle Synchronous / Non-streaming JSON response
-    const { text, media, threadUrl, accountId } = await musePool.chat({
+    const result = await musePool.chat({
       prompt: formattedPrompt,
       images,
       signal: req.signal,
       cwd,
       model,
+      durationSec,
       ua,
       keyName,
       endpoint: '/v1/chat/completions',
@@ -231,10 +249,10 @@ export async function POST(req: NextRequest) {
       pinAccount,
       idem,
     });
-    const origin = publicOrigin(req);
+    const { text, media, threadUrl } = result;
     const content =
       (media.length
-        ? `${text}\n\nAttachments:\n${media.map((u) => `- ${u.startsWith('http') ? u : origin + u}`).join('\n')}`
+        ? `${text}\n\nAttachments:\n${media.map((u) => `- ${withOrigin(u, origin)}`).join('\n')}`
         : text) + (threadUrl ? `\n\nThread: ${threadUrl}` : '');
     const promptTokens = Math.max(1, Math.round(formattedPrompt.length / 4));
     const completionTokens = Math.max(1, Math.round(content.length / 4));
@@ -244,7 +262,7 @@ export async function POST(req: NextRequest) {
       object: 'chat.completion',
       created,
       model,
-      muse: { account_id: accountId ?? null, thread_url: threadUrl ?? null },
+      muse: museMeta(result),
       choices: [
         {
           index: 0,

@@ -396,9 +396,10 @@ class MusePoolService {
       // A text-only reply to a media request is a failure state (the text
       // settled while the render was still running). Caching it would make
       // the retry replay the empty answer instantly — instead let the retry
-      // take the resume path and collect the still-running generation.
+      // take the resume path and collect the still-running generation. A
+      // partial video is the same state one step later.
       const wantsMedia = /^muse-(video|image)/i.test(String(opts.model || ''));
-      if (!wantsMedia || result.media.length > 0) {
+      if (!result.partial && (!wantsMedia || result.media.length > 0)) {
         this.idemDone.set(key, { result, at: Date.now() });
       }
       return result;

@@ -8,6 +8,15 @@ import './logBuffer';
 import { MEDIA_DIR, persistMediaFile } from './mediaStore';
 import { dataPath } from './dataDir';
 import type { OpenAIModel, Profile } from '@/types';
+import {
+  isShortVideo,
+  longestVideoSeconds,
+  type MediaInfo,
+  type MediaItem,
+  mediaKindOf,
+  requestedVideoSeconds,
+  selectFinalMedia,
+} from './mediaResult';
 
 export interface ChatOptions {
   prompt: string;
@@ -45,18 +54,20 @@ export interface ChatOptions {
    *  the driver then checks whether the prompt is already sitting in the
    *  thread and resumes the in-flight reply instead of re-sending. */
   resume?: boolean | null;
-}
-
-/** A media element found in a Muse reply — may be a blob: URL (page-local). */
-interface MediaItem {
-  src: string;
-  name?: string;
+  /** Requested video length in seconds. Falls back to the prompt's wording
+   *  for muse-video; decides when a long render counts as finished. */
+  durationSec?: number | null;
 }
 
 /** A completed Muse reply — text plus resolved media URLs. */
 export interface ChatResult {
   text: string;
   media: string[];
+  /** Same order as `media`, with what is known about each file. */
+  mediaInfo?: MediaInfo[];
+  /** The render never reached the requested length — `media` is the longest
+   *  clip Muse delivered. */
+  partial?: boolean;
   /** The Muse thread the reply landed in — page URL captured after send.
    *  Needed so follow-up tasks can return to the same conversation. */
   threadUrl?: string | null;
@@ -326,7 +337,7 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null, model = null, durationSec = null }: ChatOptions): Promise<ChatResult> {
     const session = this.resolveSession(sessionId);
 
     // Lanes are per account — requests beyond LANES_PER_ACCOUNT park here
@@ -357,9 +368,16 @@ class MuseDriverService {
       // execute them here and paste [COMMAND OUTPUT] back into the thread.
       let lastReply = '';
       let lastMedia: string[] = [];
+      let lastMediaInfo: MediaInfo[] = [];
+      let partial = false;
+      const requestedSec = /^muse-video/i.test(String(model || ''))
+        ? requestedVideoSeconds(prompt, durationSec)
+        : null;
       const makeResult = (): ChatResult => ({
         text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.',
         media: lastMedia,
+        mediaInfo: lastMediaInfo,
+        partial,
         // The URL Muse is on after the reply — /thread/new redirects to the
         // real /thread/<id> once the first message posts, so this is the
         // reliable way to learn which conversation a task landed in.
@@ -375,10 +393,14 @@ class MuseDriverService {
         // follow-up prompts and must not re-send the bridge frame.
         const result = await this.sendAndAwaitReply(page, toSend, signal, (d) => {
           buffered += d;
-        }, round === 0 ? images : undefined, !!(resume && round === 0));
+        }, round === 0 ? images : undefined, !!(resume && round === 0), requestedSec);
 
         if (result.text) lastReply = result.text;
-        if (result.media.length) lastMedia = result.media;
+        if (result.media.length) {
+          lastMedia = result.media;
+          lastMediaInfo = result.mediaInfo ?? [];
+          partial = !!result.partial;
+        }
         const cmds = parseCommandRequests(result.text).filter(isCommandAllowed);
         if (!cmds.length || round === MAX_CMD_ROUNDS) {
           // Clarification stall — Muse sometimes stops to ask "which of these
@@ -848,7 +870,8 @@ class MuseDriverService {
     signal: AbortSignal | null,
     onChunk: ((delta: string) => void) | null,
     images?: string[],
-    resume = false
+    resume = false,
+    requestedSec: number | null = null
   ): Promise<ChatResult> {
     try {
       console.log('[MuseDriver] Sending clean prompt to Muse:', cleanPrompt.slice(0, 100));
@@ -1092,6 +1115,14 @@ class MuseDriverService {
       const mediaTimeoutMs = Math.max(60000, Number(process.env.MUSE_MEDIA_TIMEOUT_MS) || 900000);
       const TIMEOUT_MS = wantsMedia ? mediaTimeoutMs : 90000;
       const MEDIA_GRACE_MS = wantsMedia ? 60000 : 0;
+      // A long video lands segment by segment and the page sits idle between
+      // them, sometimes for minutes while Muse stitches. Idle alone can't end
+      // that wait — only reaching the requested length, or this much silence.
+      const longRenderGraceMs = Math.max(
+        60000,
+        Number(process.env.MUSE_LONG_RENDER_GRACE_MS) || 300000
+      );
+      const graceMs = requestedSec ? longRenderGraceMs : MEDIA_GRACE_MS;
       let stableSince: number | null = null;
 
       // 3. Poll the chat column for the assistant reply that follows our bubble.
@@ -1332,17 +1363,26 @@ class MuseDriverService {
           // blob: URLs are kept — the driver resolves them after the reply
           // (they're only fetchable inside this page). Skips chrome
           // (icons/emoji/avatars); the region is only the assistant reply.
-          const media: { src: string; name?: string }[] = [];
-          const seenMedia = new Set<string>();
+          const media: { src: string; name?: string; kind?: string; durationSec?: number }[] = [];
           const mediaDbg: any[] = [];
           const preMedia: Set<string> | undefined = (window as any).__musePreMedia;
-          const pushUrl = (u?: string | null, name?: string) => {
+          const pushUrl = (u?: string | null, name?: string, kind?: string, duration?: number) => {
             const s = (u || '').trim();
             if (!/^(https?:|blob:)/i.test(s)) return;
             if (/emoji|avatar|sprite|favicon|logo-|profile|icon-\d|\.svg(\?|$)/i.test(s)) return;
             if (preMedia?.has(s)) return; // existed before this prompt — not ours
-            if (!seenMedia.has(s)) { seenMedia.add(s); media.push(name ? { src: s, name } : { src: s }); }
+            let item = media.find((m) => m.src === s);
+            if (!item) {
+              item = name ? { src: s, name } : { src: s };
+              media.push(item);
+            }
+            if (kind) item.kind = kind;
+            if (duration && Number.isFinite(duration) && duration > 0) {
+              item.durationSec = Math.round(duration * 10) / 10;
+            }
           };
+          const videoLengthOf = (el: Element): number | undefined =>
+            (el instanceof HTMLVideoElement ? el : el.querySelector('video'))?.duration;
           const fileNameOf = (el: Element): string | undefined => {
             const label = (el.closest('[aria-label]')?.getAttribute('aria-label')) || '';
             return label.match(/[\w.-]+\.(mp4|webm|mov|png|jpe?g|webp|gif|mp3|wav)/i)?.[0];
@@ -1414,13 +1454,21 @@ class MuseDriverService {
             if (!inReplyRegion(el) || !isMediaAttachment(el)) continue;
             // A <video> with no duration is still rendering/loading.
             if (el instanceof HTMLVideoElement && !(el.duration > 0)) busy = true;
-            if (attrSrc) { pushUrl(attrSrc, name); continue; }
-            if (el instanceof HTMLVideoElement) { pushUrl(el.src || el.currentSrc, name); }
-            else if (el instanceof HTMLSourceElement) pushUrl(el.src, name);
+            if (attrSrc) {
+              const isVideo = el.hasAttribute('data-hatch-video-src');
+              const kind = isVideo ? 'video' : el.hasAttribute('data-hatch-image-src') ? 'image' : 'audio';
+              pushUrl(attrSrc, name, kind, isVideo ? videoLengthOf(el) : undefined);
+              continue;
+            }
+            if (el instanceof HTMLVideoElement) { pushUrl(el.src || el.currentSrc, name, 'video', el.duration); }
+            else if (el instanceof HTMLSourceElement) {
+              const parent = el.parentElement;
+              pushUrl(el.src, name, parent instanceof HTMLVideoElement ? 'video' : undefined, parent instanceof HTMLVideoElement ? parent.duration : undefined);
+            }
             else if (el instanceof HTMLImageElement) {
               if (el.closest('[data-hatch-video-wrapper]')) continue; // poster frame — video src already collected
               if (el.naturalWidth > 0 && el.naturalWidth < 48) continue;
-              pushUrl(el.currentSrc || el.src, name);
+              pushUrl(el.currentSrc || el.src, name, 'image');
             } else {
               const a = el as HTMLAnchorElement;
               if (a.hasAttribute('download') || /\.(mp4|webm|mov|mkv|m3u8|png|jpe?g|webp|gif|mp3|wav|zip)(\?|#|$)/i.test(a.href)) {
@@ -1453,7 +1501,7 @@ class MuseDriverService {
         }, cleanPrompt).catch(() => null); // context destroyed mid-nav → skip tick
         if (!result) continue;
         const cleanText = result.reply ?? '';
-        const media = result.media ?? [];
+        const media = (result.media ?? []) as MediaItem[];
         lastDbg = { rcFound: result.rcFound, busy: result.busy, lcaCls: result.lcaCls, bubCls: result.bubCls, bubTxt: result.bubTxt, idxB: result.idxB, groupsIdx: result.groupsIdx, mediaDbg: result.mediaDbg };
 
         // "Delivery not confirmed" means the realtime socket dropped the send —
@@ -1526,9 +1574,10 @@ class MuseDriverService {
           Date.now() - lastChangeTime > 3500;
         if (stable) {
           if (stableSince === null) stableSince = Date.now();
-          const graceOver = Date.now() - stableSince > MEDIA_GRACE_MS;
-          if (lastMedia.length > 0 || !wantsMedia || graceOver) break;
-          // else keep polling for late-arriving media
+          const graceOver = Date.now() - stableSince > graceMs;
+          const onlySegments = isShortVideo(longestVideoSeconds(lastMedia), requestedSec);
+          if ((lastMedia.length > 0 && !onlySegments) || !wantsMedia || graceOver) break;
+          // else keep polling for late-arriving media or the remaining segments
         } else {
           stableSince = null;
         }
@@ -1540,20 +1589,31 @@ class MuseDriverService {
       // blob: URLs only live inside this page — fetch them here, persist to
       // data/media/, and hand the client a real URL it can play/download.
       const mediaOut: string[] = [];
-      for (const m of lastMedia) {
-        if (/^https?:/i.test(m.src)) {
-          mediaOut.push(m.src);
-          continue;
+      const mediaInfo: MediaInfo[] = [];
+      for (const m of selectFinalMedia(lastMedia, requestedSec)) {
+        let url: string | null = m.src;
+        if (!/^https?:/i.test(m.src)) {
+          if (signal?.aborted) break;
+          try {
+            url = await this.saveBlobMedia(page, m);
+          } catch (e: any) {
+            url = null;
+            console.warn('[MuseDriver] media save failed:', e?.message);
+          }
         }
-        if (signal?.aborted) break;
-        try {
-          const saved = await this.saveBlobMedia(page, m);
-          if (saved) mediaOut.push(saved);
-        } catch (e: any) {
-          console.warn('[MuseDriver] media save failed:', e?.message);
-        }
+        if (!url) continue;
+        mediaOut.push(url);
+        mediaInfo.push({
+          url,
+          kind: mediaKindOf(m.name || m.src, m.kind),
+          duration_sec: m.durationSec ?? null,
+        });
       }
-      return { text: lastText, media: mediaOut };
+      const partial = isShortVideo(longestVideoSeconds(lastMedia), requestedSec);
+      if (partial) {
+        console.warn(`[MuseDriver] render stopped at ${longestVideoSeconds(lastMedia)}s of ${requestedSec}s`);
+      }
+      return { text: lastText, media: mediaOut, mediaInfo, partial };
     } catch (err) {
       // Slot cleanup is the caller's (chat) responsibility.
       console.error('[MuseDriver] Round error:', err);
@@ -1628,6 +1688,8 @@ if (process.env.NODE_ENV !== 'production') {
 
 export const SUPPORTED_MODELS: OpenAIModel[] = [
   { id: 'muse-chat', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
+  { id: 'muse-video', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
+  { id: 'muse-image', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o-mini', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'claude-3-5-sonnet', object: 'model', created: 1700000000, owned_by: 'meta-muse' },

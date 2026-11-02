@@ -1,6 +1,6 @@
 # Muse Gateway
 
-Local Muse session pool + OpenAI-compatible gateway (`/v1/chat/completions`, `/v1/responses`, `/v1/models`) with a web dashboard and Windows system-tray integration.
+Self-hosted Muse session pool + OpenAI-compatible gateway (`/v1/chat/completions`, `/v1/responses`, `/v1/tasks`, `/v1/models`) with a web dashboard and Windows system-tray integration. It runs on your own machine with your own Muse accounts, and any tool that speaks the OpenAI API can use it.
 
 > **License required.** Anyone can install and open the dashboard, but the `/v1/*`
 > gateway API stays locked (HTTP 402) until you activate a purchased license key.
@@ -55,17 +55,158 @@ Three ways — all equivalent:
 Until a valid key is activated, every `/v1/*` request returns `402 license_required`.
 The dashboard and `/api/*` management routes always remain available.
 
-## Client usage (after activation)
+## Connect your tool
 
-```bash
-curl http://127.0.0.1:1412/v1/models
+After activating and adding a Muse account in the dashboard, use these three values in any tool with a custom OpenAI endpoint:
 
-curl http://127.0.0.1:1412/v1/chat/completions \
-  -H "content-type: application/json" \
-  -d '{"model":"muse-video","messages":[{"role":"user","content":"a cat playing piano"}]}'
+| Setting | Value |
+|---|---|
+| Base URL | `http://127.0.0.1:1412/v1` |
+| API key | Create one in the dashboard. Local calls need none until the first key exists. |
+| Model | `muse-chat`, `muse-image` or `muse-video` |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:1412/v1", api_key="YOUR_KEY")
+reply = client.chat.completions.create(
+    model="muse-chat",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(reply.choices[0].message.content)
 ```
 
-Works with the OpenAI SDK — point `baseURL` to `http://127.0.0.1:1412/v1`.
+For a tool on another machine, turn on the tunnel in the dashboard and use the public address it gives you, such as `https://u-xxxx.storetiki.online/v1`. Through a tunnel an API key is always required, so treat that key like a password.
+
+## Generate images and video
+
+Video takes minutes, so use the task API: create a task, then poll it or receive a webhook. Results are stored on your machine.
+
+### Create a task
+
+```bash
+curl http://127.0.0.1:1412/v1/tasks \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer YOUR_KEY" \
+  -d '{
+    "model": "muse-video",
+    "prompt": "A cat playing piano on a rooftop at night",
+    "duration": 30,
+    "ratio": "9:16",
+    "images": ["https://example.com/cat.jpg"],
+    "webhook_url": "https://example.com/hooks/muse",
+    "webhook_secret": "choose-a-secret"
+  }'
+```
+
+The gateway answers `202` right away with a task whose `status` is `running`.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `prompt` | yes | What to create, up to 20,000 characters |
+| `model` | no | `muse-video` (default), `muse-image` or `muse-chat` |
+| `duration` | no | Video length in seconds, 1 to 60 |
+| `ratio` | no | `9:16`, `16:9`, `1:1`, `4:3` or `3:4` |
+| `images` | no | Up to 16 reference images, as `http(s)` URLs or `data:image/...` URLs, at most 20MB each |
+| `webhook_url` | no | Called once when the task ends |
+| `webhook_secret` | no | Signs the webhook |
+| `idempotency_key` | no | Sending the same key again returns the existing task |
+| `new_chat` | no | Default `true`. Set `false` to continue the current conversation |
+| `thread`, `account` | no | Continue a Muse thread; pass both, from an earlier result |
+
+A URL that can't be loaded fails the request with `400`, so a job never runs without the reference you sent.
+
+### Read the result
+
+```bash
+curl http://127.0.0.1:1412/v1/tasks/TASK_ID -H "authorization: Bearer YOUR_KEY"
+```
+
+```json
+{
+  "id": "task_3f9c...",
+  "object": "task",
+  "status": "succeeded",
+  "model": "muse-video",
+  "requested_duration_sec": 30,
+  "url": "http://127.0.0.1:1412/api/media/media-abc.mp4",
+  "duration_sec": 30.1,
+  "media": [{ "url": "http://127.0.0.1:1412/api/media/media-abc.mp4", "kind": "video", "duration_sec": 30.1 }],
+  "partial": false,
+  "text": "Your video is ready.",
+  "thread_url": "https://muse.ai/thread/...",
+  "account_id": "...",
+  "error": null,
+  "webhook_status": "delivered"
+}
+```
+
+- `status` is `running`, `succeeded`, `failed` or `cancelled`. Poll every 10 seconds or so.
+- `url` is the final file. `media` lists everything delivered.
+- `partial: true` means Muse stopped before the requested length, and `url` is the longest clip it delivered. Open `thread_url` to check it.
+- Media links are permanent only while the gateway keeps the file. Copy results you want to keep.
+
+Other calls:
+
+| Call | Effect |
+|---|---|
+| `GET /v1/tasks?limit=20` | Your latest tasks, up to 100 |
+| `DELETE /v1/tasks/TASK_ID` | Stops waiting for the task. A render already inside Muse keeps running there and may use your Muse quota. |
+
+Restarting the gateway fails tasks that were still running; finished results stay readable. The last 500 finished tasks are kept.
+
+### Webhook
+
+When a task ends, the gateway sends a `POST` to `webhook_url`, retrying twice if your server doesn't answer with `2xx`:
+
+```json
+{ "event": "task.succeeded", "task": { "id": "task_3f9c...", "status": "succeeded", "url": "..." } }
+```
+
+The event is `task.succeeded`, `task.failed` or `task.cancelled`. With a `webhook_secret`, verify `X-Muse-Signature`, which is `sha256=` plus the HMAC-SHA256 of the raw body:
+
+```js
+import crypto from "node:crypto";
+
+const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+const valid =
+  signature.length === expected.length &&
+  crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+```
+
+A webhook needs an address the gateway can reach. Calls that come through a tunnel can't target private network addresses, so `localhost` webhooks only work for local callers.
+
+### Use chat completions instead
+
+`POST /v1/chat/completions` also generates media, which suits tools that only speak the OpenAI API. Send `stream: true`, because proxies cut long silent requests. Extra fields are `duration`, `thread`, `account`, `new_chat` and `idempotency_key`. Images go in `image_url` parts, as URLs or data URLs, on the last user message.
+
+Links appear as text under `Attachments:`, and the final chunk also carries them in structured form:
+
+```json
+{ "muse": { "media": [{ "url": "...", "kind": "video", "duration_sec": 30.1 }], "partial": false, "thread_url": "...", "account_id": "..." } }
+```
+
+### Good to know
+
+- One job delivers up to 60 seconds. Split longer videos into several tasks.
+- A long video can take many minutes. The gateway waits for the requested length, and returns what it has after 5 minutes without progress. Change this with `MUSE_LONG_RENDER_GRACE_MS`.
+- Each account runs a few jobs at once; extra jobs wait in line.
+- Audio input isn't supported.
+- `/v1/responses` doesn't accept reference images.
+
+### Errors
+
+| HTTP | Meaning |
+|---|---|
+| `400` | Invalid request, or a reference image couldn't be loaded |
+| `401` | API key missing or wrong |
+| `402` | License not activated |
+| `403` | This key can't use that model |
+| `404` | Task not found, or it belongs to another key |
+
+## Your responsibility
+
+The gateway drives your own muse.ai accounts through a browser. Check that this fits Muse's terms before you use it, and accept the risk that an account may be limited or banned. Only generate content you have the right to make, especially when using a real person's face.
 
 ## Commands
 

@@ -9,6 +9,7 @@
     "postbuild": "node scripts/postbuild.mjs",
     "start": "next start",
     "server": "node server.cjs",
+    "test": "node --test src/lib/gateway.test.ts",
     "license:gen": "node scripts/gen-license.mjs",
     "license:keypair": "node scripts/gen-keypair.mjs",
     "package": "npm run build && node scripts/package.mjs --zip"
