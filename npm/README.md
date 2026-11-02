@@ -76,9 +76,36 @@ reply = client.chat.completions.create(
 print(reply.choices[0].message.content)
 ```
 
+### Models
+
+The model decides what you get back. The gateway never guesses from the prompt.
+
+| Model | Returns | Notes |
+|---|---|---|
+| `muse-chat` | Text | Returns when the reply settles. If Muse attaches a file anyway, its link is included. |
+| `muse-image` | Images | Always asks Muse for an image and waits for it. No image is an error. |
+| `muse-video` | A video | Like `muse-image`, and waits for the requested length (`duration`). |
+| a combo name | Its kind | Each combo is set to Chat, Image or Video in the dashboard and behaves like that model. |
+
+`GET /v1/models` lists every model with a `kind` field (`chat`, `image` or `video`). Names such as `gpt-4o` or `claude-3-5-sonnet` are aliases for clients that only offer those names; Muse answers them as `muse-chat`.
+
 For a tool on another machine, turn on the tunnel in the dashboard and use the public address it gives you, such as `https://u-xxxx.storetiki.online/v1`. Through a tunnel an API key is always required, so treat that key like a password.
 
 ## Generate images and video
+
+### Images: `POST /v1/images/generations`
+
+The standard OpenAI image endpoint, so tools with a built-in image feature work directly:
+
+```bash
+curl http://127.0.0.1:1412/v1/images/generations \
+  -H "Authorization: Bearer YOUR_KEY" -H "Content-Type: application/json" \
+  -d '{"model": "muse-image", "prompt": "a cat on the grass", "size": "1024x1792"}'
+```
+
+`size` is mapped to the nearest ratio Muse understands (1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3). `n` returns up to 4 of the images Muse made. `response_format` is `url` (default) or `b64_json`. The response is `{ "created": ..., "data": [{ "url": "...", "revised_prompt": "..." }] }`.
+
+### Video and long jobs: the task API
 
 Video takes minutes, so use the task API: create a task, then poll it or receive a webhook. Results are stored on your machine.
 
@@ -178,7 +205,7 @@ A webhook needs an address the gateway can reach. Calls that come through a tunn
 
 ### Use chat completions instead
 
-`POST /v1/chat/completions` also generates media, which suits tools that only speak the OpenAI API. Send `stream: true`, because proxies cut long silent requests. Extra fields are `duration`, `thread`, `account`, `new_chat` and `idempotency_key`. Images go in `image_url` parts, as URLs or data URLs, on the last user message.
+`POST /v1/chat/completions` with `muse-image` or `muse-video` (or an image/video combo) also generates media, which suits tools that only speak the OpenAI API. Send `stream: true`, because proxies cut long silent requests. Extra fields are `duration`, `thread`, `account`, `new_chat` and `idempotency_key`. Images go in `image_url` parts, as URLs or data URLs, on the last user message.
 
 Links appear as text under `Attachments:`, and the final chunk also carries them in structured form:
 

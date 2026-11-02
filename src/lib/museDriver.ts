@@ -8,6 +8,7 @@ import './logBuffer';
 import { MEDIA_DIR, persistMediaFile } from './mediaStore';
 import { dataPath } from './dataDir';
 import type { OpenAIModel, Profile } from '@/types';
+import { baseKind, type ModelKind } from './modelKind';
 import {
   isShortVideo,
   longestVideoSeconds,
@@ -55,8 +56,11 @@ export interface ChatOptions {
    *  thread and resumes the in-flight reply instead of re-sending. */
   resume?: boolean | null;
   /** Requested video length in seconds. Falls back to the prompt's wording
-   *  for muse-video; decides when a long render counts as finished. */
+   *  for video requests; decides when a long render counts as finished. */
   durationSec?: number | null;
+  /** What the request must produce (set by the pool from the model or
+   *  combo). Image/video wait for media; chat returns once the text settles. */
+  kind?: ModelKind | null;
 }
 
 /** A completed Muse reply — text plus resolved media URLs. */
@@ -337,7 +341,8 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null, model = null, durationSec = null }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null, model = null, durationSec = null, kind = null }: ChatOptions): Promise<ChatResult> {
+    const outputKind = kind ?? baseKind(model);
     const session = this.resolveSession(sessionId);
 
     // Lanes are per account — requests beyond LANES_PER_ACCOUNT park here
@@ -370,9 +375,7 @@ class MuseDriverService {
       let lastMedia: string[] = [];
       let lastMediaInfo: MediaInfo[] = [];
       let partial = false;
-      const requestedSec = /^muse-video/i.test(String(model || ''))
-        ? requestedVideoSeconds(prompt, durationSec)
-        : null;
+      const requestedSec = outputKind === 'video' ? requestedVideoSeconds(prompt, durationSec) : null;
       const makeResult = (): ChatResult => ({
         text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.',
         media: lastMedia,
@@ -393,7 +396,7 @@ class MuseDriverService {
         // follow-up prompts and must not re-send the bridge frame.
         const result = await this.sendAndAwaitReply(page, toSend, signal, (d) => {
           buffered += d;
-        }, round === 0 ? images : undefined, !!(resume && round === 0), requestedSec);
+        }, round === 0 ? images : undefined, !!(resume && round === 0), requestedSec, outputKind !== 'chat');
 
         if (result.text) lastReply = result.text;
         if (result.media.length) {
@@ -871,7 +874,8 @@ class MuseDriverService {
     onChunk: ((delta: string) => void) | null,
     images?: string[],
     resume = false,
-    requestedSec: number | null = null
+    requestedSec: number | null = null,
+    wantsMedia = false
   ): Promise<ChatResult> {
     try {
       console.log('[MuseDriver] Sending clean prompt to Muse:', cleanPrompt.slice(0, 100));
@@ -1109,7 +1113,6 @@ class MuseDriverService {
       // Media-producing prompts (video/image/…) get a longer window and a
       // post-text grace period — generated media typically lands in the DOM
       // seconds after the reply text settles.
-      const wantsMedia = /video|clip|ảnh|anh\b|image|hình|mp4|render|animation|tạo/i.test(cleanPrompt);
       // Media renders can run for many minutes (10-min videos) — env-tunable
       // for the rare case Muse needs even longer.
       const mediaTimeoutMs = Math.max(60000, Number(process.env.MUSE_MEDIA_TIMEOUT_MS) || 900000);

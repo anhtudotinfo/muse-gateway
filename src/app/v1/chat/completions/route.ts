@@ -94,12 +94,16 @@ export async function POST(req: NextRequest) {
     const durationSec = Number((body as any).duration ?? (body as any).duration_sec) || null;
     const origin = publicOrigin(req);
     const keyName = apiKey === 'open' ? 'open' : apiKey.name;
-    // Media generations also land on the dashboard's Tasks page.
-    const tracked = /^muse-(video|image)/i.test(model)
-      ? taskService.trackChat({ model, prompt: formattedPrompt, durationSec, owner: keyName, origin })
-      : null;
+    // Image/video requests land on the dashboard's media page; a chat reply
+    // that still came back with a file is recorded once it arrives.
+    const kind = musePool.kindOf(model);
+    const track = () => taskService.trackChat({ model, kind, prompt: formattedPrompt, durationSec, owner: keyName, origin });
+    const tracked = kind !== 'chat' ? track() : null;
     const settle = (result: ChatResult | null, error?: string) => {
-      if (!tracked) return;
+      if (!tracked) {
+        if (result?.media.length && !req.signal.aborted) taskService.completeChat(track(), result);
+        return;
+      }
       if (result && !req.signal.aborted) taskService.completeChat(tracked, result);
       else taskService.failChat(tracked, error || 'The client disconnected before the result arrived.');
     };

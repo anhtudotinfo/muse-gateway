@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { ModelKind } from './modelKind';
 
 // Request contract of POST /v1/tasks. Kept free of the Muse pool so it can
 // be exercised without a browser.
@@ -73,12 +74,15 @@ export function parseTaskInput(body: any): TaskInputResult {
 }
 
 /** Muse has no API fields for length or shape — they travel in the text. */
-export function buildTaskPrompt({ model, prompt, durationSec, ratio }: TaskInput): string {
+export function buildTaskPrompt(
+  { prompt, durationSec, ratio }: Pick<TaskInput, 'prompt' | 'durationSec' | 'ratio'>,
+  kind: ModelKind,
+): string {
   const shape = ratio ? ` tỷ lệ khung hình ${ratio}` : '';
-  if (/^muse-image/i.test(model)) {
+  if (kind === 'image') {
     return ratio ? `Tạo ảnh${shape}: ${prompt}` : prompt;
   }
-  if (!/^muse-video/i.test(model) || (!durationSec && !ratio)) return prompt;
+  if (kind !== 'video' || (!durationSec && !ratio)) return prompt;
   const length = durationSec ? ` ${durationSec} giây` : '';
   const stitch =
     durationSec && durationSec > SEGMENT_SEC

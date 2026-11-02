@@ -7,6 +7,7 @@ import { museDriver } from './museDriver';
 import { settingsService } from './settings';
 import './logBuffer';
 import type { Profile } from '@/types';
+import { baseKind, isModelKind, withMediaIntent, type ModelKind } from './modelKind';
 import type { ChatOptions, ChatResult, LaneStatus } from './museDriver';
 
 // Pool of Muse accounts (one per saved cookie profile) with 9router-style
@@ -22,6 +23,9 @@ export interface PoolCombo {
   name: string;
   accountIds: string[];
   strategy: PoolStrategy;
+  /** What the combo produces — its name is free-form, so the kind can't be
+   *  read from it. Combos saved before this existed get it from their name. */
+  kind: ModelKind;
 }
 export type AccountStatus = 'ready' | 'busy' | 'queued' | 'cooldown' | 'disabled' | 'error';
 
@@ -187,7 +191,9 @@ class MusePoolService {
       strategy: raw.strategy === 'fallback' ? 'fallback' : raw.strategy === 'fusion' ? 'fusion' : 'round-robin',
       rrPointer: typeof raw.rrPointer === 'number' ? raw.rrPointer : 0,
       accounts: raw.accounts && typeof raw.accounts === 'object' ? raw.accounts : {},
-      combos: Array.isArray(raw.combos) ? raw.combos : [],
+      combos: Array.isArray(raw.combos)
+        ? raw.combos.map((c) => ({ ...c, kind: isModelKind(c.kind) ? c.kind : baseKind(c.name) }))
+        : [],
     };
   }
 
@@ -249,13 +255,14 @@ class MusePoolService {
     return this.state.combos || [];
   }
 
-  createCombo(name: string, accountIds: string[], strategy: PoolStrategy): PoolCombo {
+  createCombo(name: string, accountIds: string[], strategy: PoolStrategy, kind?: ModelKind): PoolCombo {
     this.load();
     const combo: PoolCombo = {
       id: `combo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       name: name.trim(),
       accountIds,
       strategy,
+      kind: kind ?? baseKind(name),
     };
     (this.state.combos ||= []).push(combo);
     this.save();
@@ -269,6 +276,7 @@ class MusePoolService {
     if (patch.name !== undefined) c.name = patch.name.trim();
     if (patch.accountIds !== undefined) c.accountIds = patch.accountIds;
     if (patch.strategy !== undefined) c.strategy = patch.strategy;
+    if (patch.kind !== undefined) c.kind = patch.kind;
     this.save();
     return true;
   }
@@ -300,6 +308,12 @@ class MusePoolService {
       }
     }
     if (dirty) this.save();
+  }
+
+  /** What a request for `model` must produce: the combo's kind, else the
+   *  built-in model's. Unknown names are chat. */
+  kindOf(model?: string | null): ModelKind {
+    return this.resolveCombo(model)?.kind ?? baseKind(model);
   }
 
   private resolveCombo(model?: string | null): PoolCombo | null {
@@ -371,6 +385,10 @@ class MusePoolService {
   private readonly IDEM_TTL_MS = 60 * 60 * 1000;
 
   async chat(opts: ChatOptions): Promise<ChatResult> {
+    // The model decides the output; an image/video request must also say so
+    // in the text, because that's what Muse acts on.
+    const kind = opts.kind ?? this.kindOf(opts.model);
+    opts = { ...opts, kind, prompt: withMediaIntent(opts.prompt, kind) };
     const key = typeof opts.idem === 'string' && opts.idem ? `idem:${opts.idem}` : null;
     if (!key) return this.chatDispatch(opts);
     const inflight = this.idemInflight.get(key);
@@ -398,7 +416,7 @@ class MusePoolService {
       // the retry replay the empty answer instantly — instead let the retry
       // take the resume path and collect the still-running generation. A
       // partial video is the same state one step later.
-      const wantsMedia = /^muse-(video|image)/i.test(String(opts.model || ''));
+      const wantsMedia = opts.kind !== 'chat';
       if (!result.partial && (!wantsMedia || result.media.length > 0)) {
         this.idemDone.set(key, { result, at: Date.now() });
       }

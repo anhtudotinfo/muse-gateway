@@ -12,6 +12,7 @@ import {
   selectFinalMedia,
   withOrigin,
 } from './mediaResult.ts';
+import { baseKind, ratioFromSize, withMediaIntent } from './modelKind.ts';
 import { buildTaskPrompt, parseTaskInput, signWebhook } from './taskInput.ts';
 
 test('requested length reads the number after "video"', () => {
@@ -108,19 +109,53 @@ test('task input validation', () => {
 test('task prompts carry length, shape and the stitch request', () => {
   const parsed = parseTaskInput({ prompt: 'con mèo', duration: 30, ratio: '9:16' });
   assert.ok(parsed.ok);
-  const prompt = buildTaskPrompt(parsed.input);
+  const prompt = buildTaskPrompt(parsed.input, 'video');
   assert.match(prompt, /^Tạo video 30 giây tỷ lệ khung hình 9:16: con mèo/);
   assert.match(prompt, /MỘT video duy nhất dài đủ 30 giây/);
   const short = parseTaskInput({ prompt: 'con mèo', duration: 8 });
   assert.ok(short.ok);
-  assert.equal(buildTaskPrompt(short.input), 'Tạo video 8 giây: con mèo');
+  assert.equal(buildTaskPrompt(short.input, 'video'), 'Tạo video 8 giây: con mèo');
   const image = parseTaskInput({ prompt: 'con mèo', model: 'muse-image', ratio: '1:1' });
   assert.ok(image.ok);
-  assert.equal(buildTaskPrompt(image.input), 'Tạo ảnh tỷ lệ khung hình 1:1: con mèo');
+  assert.equal(buildTaskPrompt(image.input, 'image'), 'Tạo ảnh tỷ lệ khung hình 1:1: con mèo');
+  // A combo named anything still shapes the prompt by its kind.
+  const combo = parseTaskInput({ prompt: 'con mèo', model: 'video-fast', duration: 8 });
+  assert.ok(combo.ok);
+  assert.equal(buildTaskPrompt(combo.input, 'video'), 'Tạo video 8 giây: con mèo');
+  assert.equal(buildTaskPrompt(combo.input, 'chat'), 'con mèo');
 });
 
 test('webhook signature is hex hmac-sha256', () => {
   const expected = crypto.createHmac('sha256', 'secret').update('{"a":1}').digest('hex');
   assert.equal(signWebhook('{"a":1}', 'secret'), `sha256=${expected}`);
   assert.notEqual(signWebhook('{}', 'a'), signWebhook('{}', 'b'));
+});
+
+test('model names map to the output they promise', () => {
+  assert.equal(baseKind('muse-video'), 'video');
+  assert.equal(baseKind('MUSE-IMAGE'), 'image');
+  assert.equal(baseKind('muse-chat'), 'chat');
+  assert.equal(baseKind('gpt-4o'), 'chat');
+  assert.equal(baseKind(null), 'chat');
+});
+
+test('image and video requests always ask Muse for that output', () => {
+  assert.equal(withMediaIntent('con mèo trên bãi cỏ', 'image'), 'Tạo ảnh: con mèo trên bãi cỏ');
+  assert.equal(withMediaIntent('a cat on the grass', 'video'), 'Tạo video: a cat on the grass');
+  // Prompts that already name the output are untouched.
+  assert.equal(withMediaIntent('Tạo ảnh tỷ lệ 3:4: áo sơ mi', 'image'), 'Tạo ảnh tỷ lệ 3:4: áo sơ mi');
+  assert.equal(withMediaIntent('product photo of a shirt', 'image'), 'product photo of a shirt');
+  assert.equal(withMediaIntent('Tạo video 30 giây: biển', 'video'), 'Tạo video 30 giây: biển');
+  // "hình" inside another word doesn't count, and chat is never rewritten.
+  assert.equal(withMediaIntent('cấu hìnhx server', 'image'), 'Tạo ảnh: cấu hìnhx server');
+  assert.equal(withMediaIntent('tạo dàn ý bài viết', 'chat'), 'tạo dàn ý bài viết');
+});
+
+test('OpenAI image sizes map to the nearest ratio', () => {
+  assert.equal(ratioFromSize('1024x1024'), '1:1');
+  assert.equal(ratioFromSize('1024x1792'), '9:16');
+  assert.equal(ratioFromSize('1792x1024'), '16:9');
+  assert.equal(ratioFromSize('1536x1024'), '3:2');
+  assert.equal(ratioFromSize('auto'), null);
+  assert.equal(ratioFromSize(undefined), null);
 });

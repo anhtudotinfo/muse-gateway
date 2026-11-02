@@ -10,10 +10,11 @@ import type { EndpointKey } from "./types";
 // Integration guide with the chosen endpoint and key filled in, so a user
 // can paste each example into their own tool unchanged.
 
-type Example = "video" | "status" | "python" | "webhook" | "chat";
+type Example = "video" | "image" | "status" | "python" | "webhook" | "chat";
 
 const EXAMPLES: { id: Example; label: string; hint: string }[] = [
   { id: "video", label: "Create video", hint: "Starts a 30-second video and returns a task right away." },
+  { id: "image", label: "Create image", hint: "OpenAI-style image endpoint: model muse-image (or an image combo), size maps to a ratio." },
   { id: "status", label: "Check result", hint: "Poll until status is succeeded or failed. url is the final file." },
   { id: "python", label: "Python", hint: "Create a task and wait for the finished file." },
   { id: "webhook", label: "Webhook", hint: "Verify the signature the gateway sends when a task ends." },
@@ -35,6 +36,17 @@ function examples(base: string, key: string): Record<Example, string> {
     "webhook_url": "https://example.com/hooks/muse",
     "webhook_secret": "choose-a-secret"
   }'`,
+    image: `curl ${base}/images/generations \\
+  -H "Content-Type: application/json"${auth} \\
+  -d '{
+    "model": "muse-image",
+    "prompt": "A cat on the grass, golden hour",
+    "size": "1024x1792"
+  }'
+
+# Response:
+# { "created": 1793600000,
+#   "data": [{ "url": "${base.replace(/\/v1$/, "")}/api/media/media-....webp", "revised_prompt": "..." }] }`,
     status: `curl ${base}/tasks/TASK_ID${auth.replace(" \\\n", " ")}
 
 # Response when finished:

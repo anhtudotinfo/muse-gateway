@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
+import { musePool } from '@/lib/musePool';
+import { baseKind } from '@/lib/modelKind';
 import { apiKeyService } from '@/lib/apiKeys';
 import { isRemoteHeaders } from '@/lib/remoteDetect';
 import { licenseGate } from '@/lib/licenseGate';
@@ -35,7 +37,14 @@ export async function GET(
   }
   const params = await props.params;
   const targetId = params.model;
-  const model = SUPPORTED_MODELS.find((m) => m.id === targetId);
+  // Combos are models too (same list as /v1/models), each with its kind.
+  const builtIn = SUPPORTED_MODELS.find((m) => m.id === targetId);
+  const combo = builtIn ? null : musePool.getCombos().find((c) => c.name === targetId);
+  const model = builtIn
+    ? { ...builtIn, kind: baseKind(builtIn.id) }
+    : combo
+      ? { id: combo.name, object: 'model', created: 0, owned_by: 'muse-pool', kind: combo.kind }
+      : null;
 
   if (!model) {
     return NextResponse.json(

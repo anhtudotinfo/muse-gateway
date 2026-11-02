@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { musePool, type PoolStrategy } from '@/lib/musePool';
+import { isModelKind } from '@/lib/modelKind';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,8 @@ export async function POST(req: Request) {
   }
   const strategy = VALID.includes(body.strategy) ? body.strategy : 'round-robin';
   const accountIds = Array.isArray(body.accountIds) ? body.accountIds.map(String) : [];
-  return NextResponse.json(musePool.createCombo(name, accountIds, strategy), { status: 201 });
+  const kind = isModelKind(body.kind) ? body.kind : undefined;
+  return NextResponse.json(musePool.createCombo(name, accountIds, strategy, kind), { status: 201 });
 }
 
 export async function PATCH(req: Request) {
@@ -31,6 +33,7 @@ export async function PATCH(req: Request) {
   if (body.name !== undefined) patch.name = String(body.name);
   if (Array.isArray(body.accountIds)) patch.accountIds = body.accountIds.map(String);
   if (VALID.includes(body.strategy)) patch.strategy = body.strategy;
+  if (isModelKind(body.kind)) patch.kind = body.kind;
   if (patch.name) {
     const dup = musePool.findComboByName(patch.name);
     if (dup && dup.id !== id) {

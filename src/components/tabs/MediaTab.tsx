@@ -11,6 +11,8 @@ export interface DashboardTask {
   source: 'api' | 'chat';
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   model: string;
+  /** What the model promised (combos included); absent from older gateways. */
+  kind?: 'chat' | 'image' | 'video';
   prompt: string;
   key_name: string;
   created_at: number;
@@ -81,10 +83,10 @@ function formatLength(task: DashboardTask): string {
   return task.requested_duration_sec ? `${actual} / ${task.requested_duration_sec}s` : actual;
 }
 
-export function isVideo(task: Pick<DashboardTask, 'url' | 'model'>): boolean {
+export function isVideo(task: Pick<DashboardTask, 'url' | 'model' | 'kind'>): boolean {
   if (task.url && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(task.url)) return true;
   if (task.url && /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(task.url)) return false;
-  return /video/i.test(task.model);
+  return task.kind ? task.kind === 'video' : /video/i.test(task.model);
 }
 
 /** Files the gateway stores itself are served from /api/media on every

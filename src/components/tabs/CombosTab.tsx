@@ -5,6 +5,7 @@ import { useApp } from '@/components/AppShell';
 import { HeaderSlot } from '@/components/HeaderSlot';
 import { maskName } from '@/lib/mask';
 import type { PoolCombo, PoolStateView, PoolStrategy } from '@/lib/musePool';
+import type { ModelKind } from '@/lib/modelKind';
 
 const STRATEGIES: { key: PoolStrategy; short: string; label: string; desc: string }[] = [
   { key: 'round-robin', short: 'Xoay đều', label: 'Xoay đều', desc: 'Lần lượt từng tài khoản, chia tải đều nhau.' },
@@ -14,6 +15,15 @@ const STRATEGIES: { key: PoolStrategy; short: string; label: string; desc: strin
 
 const strategyLabel = (s: PoolStrategy) => STRATEGIES.find((x) => x.key === s)?.label || s;
 
+// The combo name is free-form, so the combo states what it returns — the
+// gateway then treats it exactly like muse-chat / muse-image / muse-video.
+const KINDS: { key: ModelKind; label: string; desc: string }[] = [
+  { key: 'chat', label: 'Chat', desc: 'Trả lời bằng chữ, như muse-chat.' },
+  { key: 'image', label: 'Ảnh', desc: 'Luôn trả về ảnh, như muse-image.' },
+  { key: 'video', label: 'Video', desc: 'Luôn trả về video và chờ đủ độ dài, như muse-video.' },
+];
+const kindLabel = (k: ModelKind | undefined) => KINDS.find((x) => x.key === k)?.label || 'Chat';
+
 export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) => void }) {
   const { maskEmails, showToast } = useApp();
   // null until the first fetch lands, so the empty state never flashes.
@@ -22,6 +32,7 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
   const [editing, setEditing] = useState<PoolCombo | null>(null);
   const [formName, setFormName] = useState('');
   const [formStrategy, setFormStrategy] = useState<PoolStrategy>('round-robin');
+  const [formKind, setFormKind] = useState<ModelKind>('chat');
   const [formAccounts, setFormAccounts] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
   const formRef = useRef<HTMLElement>(null);
@@ -53,6 +64,7 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
     setEditing(null);
     setFormName('');
     setFormStrategy('round-robin');
+    setFormKind('chat');
     setFormAccounts(accounts.map((a) => a.id));
     setShowForm(true);
   };
@@ -61,6 +73,7 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
     setEditing(c);
     setFormName(c.name);
     setFormStrategy(c.strategy);
+    setFormKind(c.kind ?? 'chat');
     setFormAccounts([...c.accountIds]);
     setShowForm(true);
   };
@@ -73,8 +86,8 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           editing
-            ? { id: editing.id, name: formName, strategy: formStrategy, accountIds: formAccounts }
-            : { name: formName, strategy: formStrategy, accountIds: formAccounts }
+            ? { id: editing.id, name: formName, kind: formKind, strategy: formStrategy, accountIds: formAccounts }
+            : { name: formName, kind: formKind, strategy: formStrategy, accountIds: formAccounts }
         ),
       });
       const j = await res.json().catch(() => ({}));
@@ -157,6 +170,7 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
               <thead>
                 <tr>
                   <th>Tên combo (model)</th>
+                  <th>Loại</th>
                   <th>Cách chia</th>
                   <th>Tài khoản</th>
                   <th><span className="pool-sr">Thao tác</span></th>
@@ -181,6 +195,9 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
                           </svg>
                         </button>
                       </div>
+                    </td>
+                    <td>
+                      <span className={`acc2-pill ${c.kind === 'chat' || !c.kind ? '' : 'ok'}`}>{kindLabel(c.kind)}</span>
                     </td>
                     <td>
                       <span className="acc2-pill">{strategyLabel(c.strategy)}</span>
@@ -238,6 +255,23 @@ export function CombosTab({ onCopyText }: { onCopyText: (t: string, l: string) =
                 onChange={(e) => setFormName(e.target.value)}
               />
               <span className="pool-help">Chữ thường, số, dấu gạch. Đây là giá trị model khi gọi API.</span>
+
+              <span className="pool-label pool-label-gap" id="pool-combo-kind">Loại</span>
+              <div className="acc2-segment small pool-segment" role="group" aria-labelledby="pool-combo-kind">
+                {KINDS.map((k) => (
+                  <button
+                    key={k.key}
+                    type="button"
+                    aria-pressed={formKind === k.key}
+                    className={formKind === k.key ? 'active' : ''}
+                    title={k.desc}
+                    onClick={() => setFormKind(k.key)}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+              <span className="pool-help">{KINDS.find((k) => k.key === formKind)?.desc}</span>
             </div>
             <div className="pool-field">
               <span className="pool-label" id="pool-combo-strategy">Cách chia</span>

@@ -23,10 +23,11 @@ npm test
 
 | Path | Contents |
 |---|---|
-| `src/app/v1/` | Public API: chat completions, responses, models, tasks |
+| `src/app/v1/` | Public API: chat completions, responses, images, models, tasks |
 | `src/app/api/` | Dashboard API and media delivery |
 | `src/lib/museDriver.ts` | Drives muse.ai in a browser |
 | `src/lib/musePool.ts` | Account selection, cooldowns, idempotency |
+| `src/lib/modelKind.ts` | What each model returns (chat / image / video); the only place that decides it |
 | `src/lib/tasks.ts` | Background tasks and webhooks |
 | `npm/` | Published package: CLI, tray and user README |
 | `license-server/` | License service |

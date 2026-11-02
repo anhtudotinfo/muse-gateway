@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
 import { musePool } from '@/lib/musePool';
+import { baseKind } from '@/lib/modelKind';
 import { apiKeyService } from '@/lib/apiKeys';
 import { isRemoteHeaders } from '@/lib/remoteDetect';
 import { licenseGate } from '@/lib/licenseGate';
@@ -19,13 +20,15 @@ export async function GET(req: Request) {
   const gate = licenseGate(corsHeaders);
   if (gate) return gate;
   // Expose combos as selectable model names (9router-style)
+  // `kind` (chat / image / video) is an extra field: what each model returns.
   const comboModels = musePool.getCombos().map((c) => ({
     id: c.name,
     object: 'model',
     created: 0,
     owned_by: 'muse-pool',
+    kind: c.kind,
   }));
-  let data = [...SUPPORTED_MODELS, ...comboModels];
+  let data = [...SUPPORTED_MODELS.map((m) => ({ ...m, kind: baseKind(m.id) })), ...comboModels];
 
   // When a restricted key is supplied, expose only its allow-listed models.
   // Unauthenticated LOCAL calls (dashboard model picker) get the full list;

@@ -3,6 +3,7 @@ import { dataPath } from './dataDir';
 import { assertDialableUrl } from './imageRefs';
 import { mediaKindOf, type MediaInfo, withOrigin } from './mediaResult';
 import type { ChatResult } from './museDriver';
+import { baseKind, type ModelKind } from './modelKind';
 import { musePool } from './musePool';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { buildTaskPrompt, signWebhook, type TaskInput } from './taskInput';
@@ -20,6 +21,8 @@ interface TaskRecord {
   source?: 'api' | 'chat';
   status: TaskStatus;
   model: string;
+  /** Output the model promised. Absent on records from before it existed. */
+  kind?: ModelKind;
   prompt: string;
   durationSec: number | null;
   newChat: boolean;
@@ -70,6 +73,7 @@ export function taskView(task: TaskRecord) {
     source: task.source ?? 'api',
     status: task.status,
     model: task.model,
+    kind: task.kind ?? baseKind(task.model),
     created_at: seconds(task.createdAt),
     started_at: seconds(task.startedAt),
     finished_at: seconds(task.finishedAt),
@@ -163,6 +167,7 @@ class TaskService {
         images,
         signal: controller.signal,
         model: task.model,
+        kind: task.kind,
         durationSec: task.durationSec,
         ua,
         keyName: task.owner,
@@ -190,7 +195,7 @@ class TaskService {
       threadUrl: result.threadUrl ?? null,
       accountId: result.accountId ?? null,
     };
-    if (/^muse-(video|image)/i.test(task.model) && media.length === 0) {
+    if ((task.kind ?? baseKind(task.model)) !== 'chat' && media.length === 0) {
       this.finish(task, 'failed', { ...shared, error: `Muse returned no media: ${result.text.slice(0, 300)}` });
       return;
     }
@@ -201,6 +206,7 @@ class TaskService {
    *  the caller holds the request, so it can't be cancelled or webhooked. */
   trackChat(input: {
     model: string;
+    kind: ModelKind;
     prompt: string;
     durationSec: number | null;
     owner: string;
@@ -211,6 +217,7 @@ class TaskService {
       source: 'chat',
       status: 'running',
       model: input.model,
+      kind: input.kind,
       prompt: input.prompt,
       durationSec: input.durationSec,
       newChat: false,
@@ -283,7 +290,8 @@ class TaskService {
       source: 'api',
       status: 'queued',
       model: input.model,
-      prompt: buildTaskPrompt(input),
+      kind: musePool.kindOf(input.model),
+      prompt: buildTaskPrompt(input, musePool.kindOf(input.model)),
       durationSec: input.durationSec,
       newChat: input.newChat,
       thread: input.thread,
