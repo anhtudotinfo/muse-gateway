@@ -107,6 +107,7 @@ export function QuotaTab() {
   const [state, setState] = useState<PoolStateView | null>(null);
   const [usageById, setUsageById] = useState<Record<string, AccountUsage>>({});
   const [laneCap, setLaneCap] = useState(3);
+  const [laneMode, setLaneMode] = useState<'auto' | 'manual'>('auto');
 
   const refresh = useCallback(async () => {
     try {
@@ -123,7 +124,10 @@ export function QuotaTab() {
     refresh();
     fetch('/api/settings')
       .then((r) => r.json())
-      .then((s) => typeof s.lanesPerAccount === 'number' && setLaneCap(s.lanesPerAccount))
+      .then((s) => {
+        if (typeof s.lanesPerAccount === 'number') setLaneCap(s.lanesPerAccount);
+        if (s.lanesMode === 'auto' || s.lanesMode === 'manual') setLaneMode(s.lanesMode);
+      })
       .catch(() => {});
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
@@ -151,6 +155,19 @@ export function QuotaTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lanesPerAccount: next }),
       });
+    } catch {}
+  };
+
+  const saveLaneMode = async (mode: 'auto' | 'manual') => {
+    if (mode === laneMode) return;
+    setLaneMode(mode);
+    try {
+      await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lanesMode: mode }),
+      });
+      refresh();
     } catch {}
   };
 
@@ -193,34 +210,68 @@ export function QuotaTab() {
         <div className="ov2-card pool-card">
           <div>
             <h2 className="pool-h2">Luồng mỗi tài khoản</h2>
-            <p className="pool-lead">Số tác vụ một tài khoản chạy cùng lúc, mỗi luồng là một thread Muse.</p>
+            <p className="pool-lead">Số tác vụ một tài khoản chạy cùng lúc.</p>
           </div>
-          <div className="pool-stepper">
-            <button
-              type="button"
-              className="pool-step-btn"
-              aria-label="Giảm số luồng"
-              disabled={laneCap <= LANE_MIN}
-              onClick={() => saveLaneCap(laneCap - 1)}
-            >
-              −
-            </button>
-            <span className="pool-step-value" aria-live="polite">{laneCap}</span>
-            <button
-              type="button"
-              className="pool-step-btn"
-              aria-label="Tăng số luồng"
-              disabled={laneCap >= LANE_MAX}
-              onClick={() => saveLaneCap(laneCap + 1)}
-            >
-              +
-            </button>
+          <div role="radiogroup" aria-label="Chế độ luồng" className="pool-strategies pool-lane-modes">
+            {([
+              { key: 'auto', title: 'Tự động', desc: 'Gateway tự chọn số luồng cho từng tài khoản.' },
+              { key: 'manual', title: 'Thủ công', desc: 'Cố định một số luồng cho mọi tài khoản.' },
+            ] as const).map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                role="radio"
+                aria-checked={laneMode === m.key}
+                className={`pool-strategy ${laneMode === m.key ? 'active' : ''}`}
+                onClick={() => saveLaneMode(m.key)}
+              >
+                <span className="pool-strategy-title">{m.title}</span>
+                <span className="pool-strategy-desc">{m.desc}</span>
+              </button>
+            ))}
           </div>
-          <span className="acc2-muted pool-hint">
-            {state
-              ? `Pool chạy tối đa ${laneCap * enabledCount} tác vụ song song với ${enabledCount} tài khoản đang bật.`
-              : `Tối đa ${LANE_MIN}–${LANE_MAX} luồng mỗi tài khoản.`}
-          </span>
+          {laneMode === 'manual' ? (
+            <>
+              <div className="pool-stepper">
+                <button
+                  type="button"
+                  className="pool-step-btn"
+                  aria-label="Giảm số luồng"
+                  disabled={laneCap <= LANE_MIN}
+                  onClick={() => saveLaneCap(laneCap - 1)}
+                >
+                  −
+                </button>
+                <span className="pool-step-value" aria-live="polite">{laneCap}</span>
+                <button
+                  type="button"
+                  className="pool-step-btn"
+                  aria-label="Tăng số luồng"
+                  disabled={laneCap >= LANE_MAX}
+                  onClick={() => saveLaneCap(laneCap + 1)}
+                >
+                  +
+                </button>
+              </div>
+              <span className="acc2-muted pool-hint">
+                {state
+                  ? `Pool chạy tối đa ${laneCap * enabledCount} tác vụ song song với ${enabledCount} tài khoản đang bật.`
+                  : `Tối đa ${LANE_MIN}–${LANE_MAX} luồng mỗi tài khoản.`}
+              </span>
+            </>
+          ) : (
+            <span className="acc2-muted pool-hint">
+              Bắt đầu 2 luồng mỗi tài khoản, tự thêm khi tác vụ chạy ổn và đang có hàng chờ (tối đa 4), tự bớt khi gặp lỗi
+              trình duyệt hoặc Muse giới hạn. Hiện tại:{' '}
+              {accounts.filter((a) => a.enabled).length
+                ? accounts
+                    .filter((a) => a.enabled)
+                    .map((a) => `${maskName(a.name, maskEmails)} ${a.lanes?.cap ?? 2} luồng`)
+                    .join(', ')
+                : 'chưa có tài khoản nào bật'}
+              .
+            </span>
+          )}
         </div>
       </section>
 

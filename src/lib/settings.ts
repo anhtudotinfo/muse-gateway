@@ -24,6 +24,10 @@ export interface AppSettings {
    *  its own Muse thread, so N lanes = N concurrent generations on one
    *  account. 1–6; each tab costs ~150–300MB RAM. */
   lanesPerAccount: number;
+  /** 'auto': the gateway picks each account's lanes itself (grows while
+   *  requests queue and runs stay clean, shrinks on browser errors or Muse
+   *  limits). 'manual': every account runs exactly lanesPerAccount. */
+  lanesMode: 'auto' | 'manual';
   /** Periodically re-test accounts sitting in cooldown and pull them back
    *  into the pool early when their session turns out to be alive. */
   autoHealEnabled: boolean;
@@ -39,6 +43,7 @@ const DEFAULTS: AppSettings = {
   keepAliveMin: 30,
   maskEmails: false,
   lanesPerAccount: 3,
+  lanesMode: 'auto',
   autoHealEnabled: true,
 };
 
@@ -87,6 +92,9 @@ class SettingsService {
     }
     if (typeof patch.lanesPerAccount === 'number' && patch.lanesPerAccount >= 1 && patch.lanesPerAccount <= 6) {
       this.settings.lanesPerAccount = Math.round(patch.lanesPerAccount);
+    }
+    if (patch.lanesMode === 'auto' || patch.lanesMode === 'manual') {
+      this.settings.lanesMode = patch.lanesMode;
     }
     this.save();
     return this.get();

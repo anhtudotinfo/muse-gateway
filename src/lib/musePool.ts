@@ -479,6 +479,7 @@ class MusePoolService {
       st.lastError = '';
       this.setStats(pinned.id, st);
       this.recordUsage(pinned.id, pinned.name, true, Date.now() - t0, opts.prompt, undefined, opts, result.text.length);
+      museDriver.noteLaneOutcome(pinned.id, null);
       console.log(`[MusePool] "${pinned.name}" ok — ${Date.now() - t0}ms, reply ${result.text.length} chars${result.media?.length ? `, ${result.media.length} media` : ''}`);
       return result;
     }
@@ -524,6 +525,7 @@ class MusePoolService {
         st.lastError = '';
         this.setStats(acc.id, st);
         this.recordUsage(acc.id, acc.name, true, Date.now() - t0, opts.prompt, undefined, opts, result.text.length);
+        museDriver.noteLaneOutcome(acc.id, null);
         console.log(`[MusePool] "${acc.name}" ok — ${Date.now() - t0}ms, reply ${result.text.length} chars${result.media?.length ? `, ${result.media.length} media` : ''}`);
         return result;
       } catch (err: any) {
@@ -589,6 +591,7 @@ class MusePoolService {
         st.lastError = '';
         this.setStats(acc.id, st);
         this.recordUsage(acc.id, acc.name, true, Date.now() - t0, opts.prompt, undefined, opts, result.text.length);
+        museDriver.noteLaneOutcome(acc.id, null);
         return { result, acc };
       } catch (err: any) {
         this.applyFailure(acc, err, t0, opts);
@@ -604,6 +607,7 @@ class MusePoolService {
 
   private applyFailure(acc: Profile, err: any, t0: number, opts: ChatOptions): void {
     const kind = this.classifyError(err);
+    museDriver.noteLaneOutcome(acc.id, kind);
     const st = this.statsFor(acc.id);
     st.lastError = String(err?.message || err).slice(0, 300);
     if (kind === 'infra') {

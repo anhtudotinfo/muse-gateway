@@ -1,3 +1,4 @@
+import os from 'node:os';
 import puppeteer, { Browser, BrowserContext, Page } from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
@@ -84,20 +85,73 @@ const MAX_CMD_ROUNDS = 5;
 
 /** Parallel pages (tabs) per saved account. Each lane drives its own Muse
  *  thread — Muse renders server-side per conversation, so one account can
- *  have several generations in flight at once. Chrome tab ≈ 150–300MB, so
- *  the cap is modest; extra requests park in the lane queue. Live value —
- *  the dashboard setting is re-read on every acquisition so changing it
- *  applies instantly; MUSE_LANES_PER_ACCOUNT env overrides for power users. */
-const laneCap = () =>
-  Math.max(
-    1,
-    Math.min(
-      6,
-      Number(process.env.MUSE_LANES_PER_ACCOUNT) ||
-        settingsService.get().lanesPerAccount ||
-        3
-    )
-  );
+ *  have several generations in flight at once. Chrome tab ≈ 150–300MB.
+ *  Manual mode uses the dashboard number; auto mode (default) uses the
+ *  account's adaptive cap (see LaneTuner). MUSE_LANES_PER_ACCOUNT pins it. */
+const laneCap = (sessionId: string) => {
+  const pinned = Number(process.env.MUSE_LANES_PER_ACCOUNT);
+  if (pinned) return Math.max(1, Math.min(6, pinned));
+  const s = settingsService.get();
+  if (s.lanesMode === 'manual') return Math.max(1, Math.min(6, s.lanesPerAccount || 3));
+  return laneTuner.cap(sessionId);
+};
+
+/**
+ * Automatic lanes: nobody should have to guess how many tabs an account can
+ * drive. Each account starts at 2. After a run of clean results while
+ * requests were actually queueing for it, it gets one more lane (up to 4,
+ * and only with RAM to spare). A browser-side failure or a Muse limit takes
+ * one away (down to 1). So it settles where that account and this machine
+ * stay reliable.
+ */
+class LaneTuner {
+  static readonly START = 2;
+  static readonly MIN = 1;
+  static readonly MAX = 4;
+  /** Clean results in a row before trying one more lane. */
+  static readonly GROW_AFTER = 3;
+  /** Growing only helps when work actually waited for this account. */
+  static readonly DEMAND_WINDOW_MS = 5 * 60 * 1000;
+  /** Leave this much memory free before opening another tab. */
+  static readonly MIN_FREE_BYTES = 1.5 * 1024 ** 3;
+  private caps = new Map<string, number>();
+  private streaks = new Map<string, number>();
+  private queuedAt = new Map<string, number>();
+
+  cap(sessionId: string): number {
+    return this.caps.get(sessionId) ?? LaneTuner.START;
+  }
+
+  noteQueued(sessionId: string): void {
+    this.queuedAt.set(sessionId, Date.now());
+  }
+
+  /** kind: null for success, else the pool's error class. */
+  noteOutcome(sessionId: string, kind: string | null): void {
+    const cap = this.cap(sessionId);
+    if (kind === null) {
+      const streak = (this.streaks.get(sessionId) ?? 0) + 1;
+      const demand = Date.now() - (this.queuedAt.get(sessionId) ?? 0) < LaneTuner.DEMAND_WINDOW_MS;
+      if (streak >= LaneTuner.GROW_AFTER && demand && cap < LaneTuner.MAX && os.freemem() > LaneTuner.MIN_FREE_BYTES) {
+        this.caps.set(sessionId, cap + 1);
+        this.streaks.set(sessionId, 0);
+        console.log(`[LaneTuner] ${sessionId}: ${cap} → ${cap + 1} lanes (clean run, work queueing)`);
+      } else {
+        this.streaks.set(sessionId, streak);
+      }
+      return;
+    }
+    // A bad session (auth) says nothing about parallelism.
+    if (kind === 'infra' || kind === 'quota' || kind === 'transient') {
+      this.streaks.set(sessionId, 0);
+      if (cap > LaneTuner.MIN) {
+        this.caps.set(sessionId, cap - 1);
+        console.log(`[LaneTuner] ${sessionId}: ${cap} → ${cap - 1} lanes (${kind} error)`);
+      }
+    }
+  }
+}
+const laneTuner = new LaneTuner();
 
 /** One lane = one page under an account's context. */
 export interface LaneView {
@@ -112,6 +166,8 @@ export interface LaneView {
 
 export interface LaneStatus {
   cap: number;
+  /** Cap chosen by the gateway (auto mode) rather than the dashboard. */
+  auto: boolean;
   lanes: LaneView[];
   busy: number;
   /** Lanes mid-creation (page load + socket warmup in progress). */
@@ -205,6 +261,13 @@ class MuseDriverService {
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--window-size=1280,800',
+      // Every lane is a tab, and headless Chrome treats all but the newest
+      // tab as hidden: no animation frames at all. Muse's UI then stalls in
+      // those tabs — upload chips never appear, the new-chat button doesn't
+      // react, navigations time out — so parallel lanes failed in bursts.
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows',
     ];
     if (proxyKey) args.push(`--proxy-server=${proxyKey}`);
 
@@ -259,6 +322,11 @@ class MuseDriverService {
   private async addLane(slot: AccountSlot, session: Profile): Promise<Page> {
     const page = await slot.context.newPage();
     await page.setViewport({ width: 1280, height: 800 });
+    // Each lane renders as the focused, visible tab (see ensureBrowser).
+    try {
+      const cdp = await page.createCDPSession();
+      await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    } catch {}
 
     // Authenticated proxy — credentials live in the URL, Chrome prompts per
     // page; answer them once at page level.
@@ -298,10 +366,15 @@ class MuseDriverService {
       // Prune lanes Chrome already closed (crash, context teardown) so they
       // don't count against laneCap().
       slot.pages = slot.pages.filter((p) => !p.isClosed());
-      const free = slot.pages.find((p) => !this.busyPages.has(p));
+      // The cap counts lanes in USE: when auto mode lowers it, spare idle
+      // tabs from before must not keep the old parallelism going.
+      const cap = laneCap(session.id);
+      const busy = slot.pages.filter((p) => this.busyPages.has(p)).length;
+      const free = busy < cap ? slot.pages.find((p) => !this.busyPages.has(p)) : undefined;
       if (free) return free;
       if (
-        slot.pages.length + slot.creating < laneCap() &&
+        busy < cap &&
+        slot.pages.length + slot.creating < cap &&
         (!slot.lastLaneError || Date.now() - slot.lastLaneError > 30000)
       ) {
         slot.creating++;
@@ -327,6 +400,7 @@ class MuseDriverService {
         console.log(`[MuseDriver] queued — "${session.name}" hết lane rảnh, request xếp hàng chờ`);
         announced = true;
       }
+      laneTuner.noteQueued(session.id);
       await new Promise((r) => setTimeout(r, 200));
     }
   }
@@ -472,12 +546,18 @@ class MuseDriverService {
       });
     }
     return {
-      cap: laneCap(),
+      cap: laneCap(sessionId),
+      auto: !Number(process.env.MUSE_LANES_PER_ACCOUNT) && settingsService.get().lanesMode !== 'manual',
       lanes,
       busy: lanes.filter((l) => l.busy).length,
       creating: slot?.creating ?? 0,
       queued: this.waiting.has(sessionId),
     };
+  }
+
+  /** Feed a finished request's outcome to the automatic lane tuner. */
+  noteLaneOutcome(sessionId: string, kind: string | null): void {
+    laneTuner.noteOutcome(sessionId, kind);
   }
 
   /** Close lane #index (1-based, matching laneStatus). Busy lanes are
