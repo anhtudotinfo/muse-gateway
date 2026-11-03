@@ -1008,13 +1008,16 @@ class MuseDriverService {
           // Wait for the composer's attachment chip/preview to render and
           // the upload to settle — sending early → "Delivery not confirmed".
           if (how === 'upload' || how === 'skip-pending') {
+            // Several large refs take a while to upload: allow ~10s plus 5s
+            // per image (max ~45s) before giving up.
+            const polls = Math.min(112, 25 + images.length * 12);
             let attached = false;
-            for (let t = 0; t < 25; t++) {
+            for (let t = 0; t < polls; t++) {
               await new Promise((r) => setTimeout(r, 400));
               if (await page.evaluate(pendingProbe)) { attached = true; break; }
             }
             if (!attached && !already) {
-              throw new Error('Ảnh tham chiếu upload xong nhưng chip preview không xuất hiện sau 10s.');
+              throw new Error(`Ảnh tham chiếu upload xong nhưng chip preview không xuất hiện sau ${Math.round((polls * 400) / 1000)}s.`);
             }
             await new Promise((r) => setTimeout(r, 1500));
           }

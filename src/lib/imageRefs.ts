@@ -6,6 +6,10 @@ import net from 'node:net';
 // steered at the host's own network unless the caller is local too.
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+// Video and audio refs (a clip to follow, a voice track) are bigger.
+const MAX_MEDIA_BYTES = 40 * 1024 * 1024;
+/** Attachment types Muse's composer takes and the driver uploads. */
+const MEDIA_TYPE = /^(image|video|audio)\//;
 const MAX_REDIRECTS = 3;
 const FETCH_TIMEOUT_MS = 20_000;
 
@@ -66,9 +70,10 @@ export async function assertDialableUrl(url: string, allowPrivate: boolean): Pro
   return parsed;
 }
 
-async function readCapped(res: Response): Promise<Buffer> {
+async function readCapped(res: Response, cap = MAX_IMAGE_BYTES): Promise<Buffer> {
+  const tooBig = `Reference is larger than ${Math.round(cap / 1024 / 1024)}MB.`;
   const declared = Number(res.headers.get('content-length') || 0);
-  if (declared > MAX_IMAGE_BYTES) throw new ImageRefError('Image is larger than 20MB.');
+  if (declared > cap) throw new ImageRefError(tooBig);
   const reader = res.body?.getReader();
   if (!reader) throw new ImageRefError('Image response had no body.');
   const chunks: Uint8Array[] = [];
@@ -77,9 +82,9 @@ async function readCapped(res: Response): Promise<Buffer> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > MAX_IMAGE_BYTES) {
+    if (size > cap) {
       await reader.cancel().catch(() => {});
-      throw new ImageRefError('Image is larger than 20MB.');
+      throw new ImageRefError(tooBig);
     }
     chunks.push(value);
   }
@@ -100,10 +105,11 @@ async function fetchImage(url: string, allowPrivate: boolean): Promise<string> {
     }
     if (!res.ok) throw new ImageRefError(`Image download failed (HTTP ${res.status}): ${url.slice(0, 120)}`);
     const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-    if (!type.startsWith('image/')) {
-      throw new ImageRefError(`URL is not an image (${type || 'unknown type'}): ${url.slice(0, 120)}`);
+    if (!MEDIA_TYPE.test(type)) {
+      throw new ImageRefError(`URL is not an image, video or audio file (${type || 'unknown type'}): ${url.slice(0, 120)}`);
     }
-    return `data:${type};base64,${(await readCapped(res)).toString('base64')}`;
+    const cap = type.startsWith('image/') ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
+    return `data:${type};base64,${(await readCapped(res, cap)).toString('base64')}`;
   }
   throw new ImageRefError(`Too many redirects: ${url.slice(0, 120)}`);
 }
@@ -116,8 +122,10 @@ async function fetchImage(url: string, allowPrivate: boolean): Promise<string> {
 export async function loadImageRefs(refs: string[], allowPrivate: boolean): Promise<string[]> {
   return Promise.all(
     refs.map(async (ref) => {
-      if (ref.startsWith('data:image/')) return ref;
-      if (ref.startsWith('data:')) throw new ImageRefError('Only image data: URLs are allowed.');
+      // Images, plus the video/audio refs clone pipelines send (a source
+      // clip for motion, a voice track) — the driver uploads all three.
+      if (/^data:(image|video|audio)\//.test(ref)) return ref;
+      if (ref.startsWith('data:')) throw new ImageRefError('Only image, video or audio data: URLs are allowed.');
       try {
         return await fetchImage(ref, allowPrivate);
       } catch (error) {

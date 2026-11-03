@@ -32,7 +32,7 @@ export type AccountStatus = 'ready' | 'busy' | 'queued' | 'cooldown' | 'disabled
 export interface PoolAccountStats {
   enabled: boolean;
   cooldownUntil: number; // epoch ms, 0 = not cooling
-  cooldownReason: string; // 'auth' | 'quota' | 'transient' | ''
+  cooldownReason: string; // 'auth' | 'quota' | 'transient' | 'infra' | ''
   failCount: number;
   totalRequests: number;
   lastUsedAt: number;
@@ -87,6 +87,21 @@ const COOLDOWN_BASE_MS = 5 * 60 * 1000; // transient: 5min, scales with failCoun
 const COOLDOWN_MAX_MS = 60 * 60 * 1000; // quota: 1h
 const COOLDOWN_AUTH_MS = 24 * 60 * 60 * 1000; // auth/dead cookie: 24h
 const MAX_ACCOUNTS_PER_REQUEST = 8;
+// When every account is resting, wait this long for the first one to come
+// back instead of failing the request (and the whole client queue) at once.
+const MAX_WAIT_FOR_ACCOUNT_MS = 3 * 60 * 1000;
+
+/** setTimeout as a promise that rejects when the request is aborted. */
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error('aborted'));
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error('aborted'));
+    }, { once: true });
+  });
+}
 const HEAL_TICK_MS = 2 * 60 * 1000; // scan cooling accounts every 2min
 const HEAL_RECHECK_MS = 10 * 60 * 1000; // re-test each account at most every 10min
 
@@ -363,8 +378,17 @@ class MusePoolService {
   }
 
   // Classify the failure to decide how long the account sits out.
-  private classifyError(err: any): 'auth' | 'quota' | 'transient' {
+  private classifyError(err: any): 'auth' | 'quota' | 'transient' | 'infra' {
     const msg = String(err?.message || err || '').toLowerCase();
+    // Our own browser failing (crashed tab, detached frame, upload that
+    // didn't settle) says nothing about the Muse account. Checked first: the
+    // auth pattern below would otherwise catch "Session closed".
+    if (
+      /detached|target closed|session closed|protocol error|execution context was destroyed|navigating frame|browser has disconnected|connection closed|net::err|chip preview|attach được ảnh|no reference images could be decoded/.test(
+        msg
+      )
+    )
+      return 'infra';
     if (/khung chat|textarea|cookie|session|login|đăng nhập|unauthorized|401|403/.test(msg))
       return 'auth';
     if (/limit|lượt|quota|upgrade|rate.?limit|429|hết/.test(msg)) return 'quota';
@@ -467,11 +491,23 @@ class MusePoolService {
     if (strategy === 'fusion') return this.chatFusion(opts, accountIds);
 
     const tried = new Set<string>();
+    const infraRetried = new Set<string>();
     let lastErr: any = new Error('Không có tài khoản Muse nào khả dụng.');
+    const waitUntil = Date.now() + MAX_WAIT_FOR_ACCOUNT_MS;
 
     for (let i = 0; i < MAX_ACCOUNTS_PER_REQUEST; i++) {
       const acc = this.pickAccount(tried, accountIds, strategy);
-      if (!acc) break;
+      if (!acc) {
+        // Everyone usable is cooling down: wait for the first to return.
+        const readyAt = this.nextReadyAt(tried, accountIds);
+        if (readyAt !== null && readyAt <= waitUntil && !opts.signal?.aborted) {
+          console.log(`[MusePool] all accounts resting — waiting ${Math.ceil((readyAt - Date.now()) / 1000)}s`);
+          await sleep(Math.max(1000, readyAt - Date.now() + 500), opts.signal);
+          i--;
+          continue;
+        }
+        break;
+      }
 
       console.log(
         `[MusePool] route → "${acc.name}" (strategy=${strategy}${combo ? `, combo="${combo.name}"` : ''})`
@@ -491,17 +527,37 @@ class MusePoolService {
         console.log(`[MusePool] "${acc.name}" ok — ${Date.now() - t0}ms, reply ${result.text.length} chars${result.media?.length ? `, ${result.media.length} media` : ''}`);
         return result;
       } catch (err: any) {
-        tried.add(acc.id);
         lastErr = err;
         if (opts.signal?.aborted) throw err; // client gone — don't burn accounts
 
         this.applyFailure(acc, err, t0, opts);
+        // A browser-side failure gets one more go (the driver opens a fresh
+        // page) before the request moves to another account.
+        if (this.classifyError(err) === 'infra' && !infraRetried.has(acc.id)) {
+          infraRetried.add(acc.id);
+          console.log(`[MusePool] "${acc.name}" browser error — retrying without cooldown`);
+          await sleep(2000, opts.signal);
+          continue;
+        }
+        tried.add(acc.id);
         console.log(
           `[MusePool] Account "${acc.name}" failed (${this.statsFor(acc.id).cooldownReason}) → cooldown, trying next account`
         );
       }
     }
     throw lastErr;
+  }
+
+  /** Earliest moment an enabled, untried account leaves cooldown. */
+  private nextReadyAt(tried: Set<string>, accountIds: string[] | null): number | null {
+    let best: number | null = null;
+    for (const s of getSavedSessions()) {
+      if (tried.has(s.id) || (accountIds && !accountIds.includes(s.id))) continue;
+      const st = this.statsFor(s.id);
+      if (!st.enabled || st.cooldownReason === 'auth') continue;
+      if (best === null || st.cooldownUntil < best) best = st.cooldownUntil;
+    }
+    return best;
   }
 
   // Fusion (9router "race" variant): fire the prompt at every eligible account
@@ -549,8 +605,15 @@ class MusePoolService {
   private applyFailure(acc: Profile, err: any, t0: number, opts: ChatOptions): void {
     const kind = this.classifyError(err);
     const st = this.statsFor(acc.id);
-    st.failCount++;
     st.lastError = String(err?.message || err).slice(0, 300);
+    if (kind === 'infra') {
+      // Logged, but the account stays in rotation: a browser hiccup used to
+      // bench every account at once and fail the whole queue behind it.
+      this.setStats(acc.id, st);
+      this.recordUsage(acc.id, acc.name, false, Date.now() - t0, opts.prompt, String(err?.message || err).slice(0, 200), opts);
+      return;
+    }
+    st.failCount++;
     st.cooldownReason = kind;
     st.cooldownUntil =
       Date.now() +

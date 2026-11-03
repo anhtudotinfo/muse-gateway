@@ -90,7 +90,9 @@ test('remote callers cannot reach the local network', async () => {
 });
 
 test('non-image data urls are rejected, image ones pass', async () => {
-  await assert.rejects(loadImageRefs(['data:text/html;base64,AA'], true), /image data/);
+  await assert.rejects(loadImageRefs(['data:text/html;base64,AA'], true), /image, video or audio data/);
+  // Clone pipelines attach a source clip or voice track; the driver uploads them.
+  assert.deepEqual(await loadImageRefs(['data:video/mp4;base64,AA', 'data:audio/mpeg;base64,AA'], false), ['data:video/mp4;base64,AA', 'data:audio/mpeg;base64,AA']);
   assert.deepEqual(await loadImageRefs(['data:image/png;base64,AA'], false), ['data:image/png;base64,AA']);
 });
 
