@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
   const apiKey = apiKeyService.resolveKey(
     req.headers.get('authorization') || req.headers.get('x-api-key'),
     isRemoteHeaders(req.headers),
+    req.headers.get('origin'),
   );
   if (apiKey === null) return fail(401, 'Invalid or missing API key.', 'authentication_error');
 
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
   const n = Math.min(4, Math.max(1, Number.parseInt(String(body.n ?? 1), 10) || 1));
   const format = body.response_format === 'b64_json' ? 'b64_json' : 'url';
 
-  const sent = buildTaskPrompt({ prompt, durationSec: null, ratio: ratioFromSize(body.size) }, 'image');
+  const sent = buildTaskPrompt({ prompt, durationSec: null, ratio: ratioFromSize(body.size), count: n }, 'image');
   const origin = publicOrigin(req);
   const keyName = apiKey === 'open' ? 'open' : apiKey.name;
   const tracked = taskService.trackChat({ model, kind: 'image', prompt: sent, durationSec: null, owner: keyName, origin });
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
       keyName,
       endpoint: '/v1/images/generations',
       newChat: true,
+      imageCount: n,
     });
     taskService.completeChat(tracked, result);
     const images = (result.mediaInfo ?? result.media.map((url) => ({ url, kind: mediaKindOf(url) })))

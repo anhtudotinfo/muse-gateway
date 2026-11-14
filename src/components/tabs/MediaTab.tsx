@@ -8,7 +8,7 @@ import { useT } from '@/lib/i18n';
 
 export interface DashboardTask {
   id: string;
-  source: 'api' | 'chat';
+  source: 'api' | 'chat' | 'mcp';
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   model: string;
   /** What the model promised (combos included); absent from older gateways. */
@@ -23,7 +23,11 @@ export interface DashboardTask {
   partial: boolean;
   error: string | null;
   thread_url: string | null;
+  /** Muse account that served it — "open in the account's browser". */
+  account_id?: string | null;
   webhook_status: 'pending' | 'delivered' | 'failed' | null;
+  /** Why Retry is unavailable; null when it works. Absent on older gateways. */
+  retry_blocker?: string | null;
 }
 
 const POLL_MS = 5000;
@@ -154,6 +158,11 @@ export function MediaTab() {
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Selection mode: tiles toggle a checkbox instead of opening the detail.
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now() / 1000);
 
   useEffect(() => {
@@ -205,25 +214,147 @@ export function MediaTab() {
     }
   };
 
+  const megabytes = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`);
+
+  /** Bulk clean-up — 'failed' (failed + cancelled) or 'finished' (all done). */
+  const removeMany = async (scope: 'failed' | 'finished', ids: string[]) => {
+    const count = ids.length;
+    const question =
+      scope === 'failed'
+        ? t('Xoá {n} mục lỗi và đã huỷ?', { n: count })
+        : t('Xoá {n} mục đã xong, lỗi và đã huỷ? File ảnh/video trên máy cũng bị xoá — app nào còn dùng link sẽ không mở được nữa.', { n: count });
+    if (!window.confirm(question)) return;
+    setBusy(scope);
+    try {
+      // Exactly the items shown and confirmed — not whatever else the
+      // gateway keeps beyond this page.
+      const res = await fetch('/api/tasks', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setNotice(
+          data.bytes
+            ? t('Đã xoá {n} mục, giải phóng {size}.', { n: data.removed ?? 0, size: megabytes(data.bytes) })
+            : t('Đã xoá {n} mục.', { n: data.removed ?? 0 }),
+        );
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeOne = async (task: DashboardTask) => {
+    const question = task.url
+      ? t('Xoá mục này và file của nó trên máy?')
+      : t('Xoá mục này?');
+    if (!window.confirm(question)) return;
+    setBusy(task.id);
+    try {
+      await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, { method: 'DELETE' });
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retry = async (task: DashboardTask) => {
+    setBusy(task.id);
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.task?.id) {
+        setFilter('all');
+        setSelectedId(data.task.id);
+        setNotice(t('Đã gửi lại — mục mới đang chạy.'));
+      } else {
+        setNotice(data.error || t('Không thử lại được.'));
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const togglePick = (id: string) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const stopSelecting = () => {
+    setSelecting(false);
+    setPicked(new Set());
+  };
+
+  /** Stream a ZIP of these tasks' files; the browser saves it. */
+  const download = (ids: string[]) => {
+    if (!ids.length) return;
+    const a = document.createElement('a');
+    a.href = `/api/tasks/download?ids=${ids.map(encodeURIComponent).join(',')}`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setNotice(t('Đang tải {n} file về dạng .zip…', { n: ids.length }));
+  };
+
+  /** Open a visible Chrome signed in as the account that ran this task, on
+   *  its thread — to see what Muse actually did with the request. */
+  const openInAccount = async (task: DashboardTask) => {
+    if (!task.account_id) return;
+    setBusy(`open:${task.id}`);
+    try {
+      const res = await fetch('/api/launch-browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: task.account_id, url: task.thread_url || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setNotice(res.ok ? t('Đã mở trình duyệt của tài khoản tại thread này.') : data.error || t('Không mở được trình duyệt.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const isDone = (task: DashboardTask) =>
+    task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled';
+  const canRetry = (task: DashboardTask) =>
+    (task.status === 'failed' || task.status === 'cancelled') && task.retry_blocker === null;
+
   // Newest first, whatever order the API hands back.
   const byKind = tasks.filter((task) => matchesKind(task, kind)).sort((a, b) => b.created_at - a.created_at);
   const visible = byKind.filter((task) => matches(task, filter));
   const counts = Object.fromEntries(
     FILTERS.map((f) => [f, byKind.filter((task) => matches(task, f)).length]),
   ) as Record<Filter, number>;
+  const failedIds = tasks.filter((task) => task.status === 'failed' || task.status === 'cancelled').map((task) => task.id);
+  const finishedIds = tasks.filter(isDone).map((task) => task.id);
+  const failedCount = failedIds.length;
+  const finishedCount = finishedIds.length;
   // "Đã huỷ" only earns a chip once something was actually cancelled.
   const filters = FILTERS.filter((f) => f !== 'cancelled' || counts.cancelled > 0 || filter === 'cancelled');
 
   const selected = visible.find((task) => task.id === selectedId) ?? visible[0] ?? null;
+  // What "Download" takes: the picked items, else everything shown that has a file.
+  const withFiles = visible.filter((task) => !!task.url);
+  const pickedIds = visible.filter((task) => picked.has(task.id)).map((task) => task.id);
+  const pickedWithFiles = withFiles.filter((task) => picked.has(task.id)).map((task) => task.id);
+  const pickedDone = visible.filter((task) => picked.has(task.id) && isDone(task)).map((task) => task.id);
 
   const canCancel = (task: DashboardTask) =>
     task.source !== 'chat' && (task.status === 'running' || task.status === 'queued');
 
   const sourceOf = (task: DashboardTask) =>
-    `${task.source === 'chat' ? 'Chat' : 'API'}${task.key_name ? ` · ${task.key_name}` : ''}`;
+    `${task.source === 'chat' ? 'Chat' : task.source === 'mcp' ? 'MCP' : 'API'}${task.key_name ? ` · ${task.key_name}` : ''}`;
 
   const origin = (task: DashboardTask) =>
-    `${task.source === 'chat' ? 'Chat' : 'API'} · ${task.model} · ${t('key')} ${task.key_name}`;
+    `${task.source === 'chat' ? 'Chat' : task.source === 'mcp' ? 'MCP' : 'API'} · ${task.model} · ${t('key')} ${task.key_name}`;
 
   const ago = (seconds: number) => {
     const s = Math.max(0, now - seconds);
@@ -274,6 +405,74 @@ export function MediaTab() {
     <div className="med">
       <HeaderSlot>
         <div className="med-header">
+          {selecting ? (
+            <>
+              <span className="acc2-muted med-picked">{t('Đã chọn {n}', { n: pickedIds.length })}</span>
+              <button
+                type="button"
+                className="acc2-btn small"
+                onClick={() => setPicked(new Set(pickedIds.length === visible.length ? [] : visible.map((task) => task.id)))}
+              >
+                {pickedIds.length === visible.length && visible.length ? t('Bỏ chọn hết') : t('Chọn hết')}
+              </button>
+              <button
+                type="button"
+                className="acc2-btn small primary"
+                disabled={!pickedWithFiles.length}
+                onClick={() => download(pickedWithFiles)}
+              >
+                {t('Tải xuống')}{pickedWithFiles.length ? ` (${pickedWithFiles.length})` : ''}
+              </button>
+              <button
+                type="button"
+                className="acc2-btn small danger"
+                disabled={!pickedDone.length || busy !== null}
+                onClick={() => void removeMany('finished', pickedDone).then(stopSelecting)}
+              >
+                {t('Xoá đã chọn')}{pickedDone.length ? ` (${pickedDone.length})` : ''}
+              </button>
+              <button type="button" className="acc2-btn small" onClick={stopSelecting}>
+                {t('Xong')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="acc2-btn small" disabled={!visible.length} onClick={() => setSelecting(true)}>
+                {t('Chọn')}
+              </button>
+              <button
+                type="button"
+                className="acc2-btn small"
+                disabled={!withFiles.length}
+                title={t('Tải mọi file đang hiển thị về dạng .zip')}
+                onClick={() => download(withFiles.map((task) => task.id))}
+              >
+                {t('Tải tất cả')}{withFiles.length ? ` (${withFiles.length})` : ''}
+              </button>
+            </>
+          )}
+          {!selecting && (
+          <>
+          <button
+            type="button"
+            className="acc2-btn small"
+            disabled={!failedCount || busy !== null}
+            onClick={() => void removeMany('failed', failedIds)}
+            title={t('Xoá các mục lỗi và đã huỷ')}
+          >
+            {t('Xoá mục lỗi')}{failedCount ? ` (${failedCount})` : ''}
+          </button>
+          <button
+            type="button"
+            className="acc2-btn small danger"
+            disabled={!finishedCount || busy !== null}
+            onClick={() => void removeMany('finished', finishedIds)}
+            title={t('Xoá mọi mục đã xong, kể cả file trên máy')}
+          >
+            {t('Xoá tất cả')}
+          </button>
+          </>
+          )}
           <button type="button" className="acc2-icon-btn" aria-label={t('Refresh')} title={t('Refresh')} onClick={() => void load()}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
               <path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" />
@@ -313,6 +512,12 @@ export function MediaTab() {
       </div>
 
       {loadError && <p className="med-error" role="alert">{t('Could not load tasks.')}</p>}
+      {notice && (
+        <p className="med-notice" role="status">
+          {notice}{' '}
+          <button type="button" className="ov2-link" onClick={() => setNotice(null)}>{t('Đóng')}</button>
+        </p>
+      )}
 
       {!loaded ? (
         <div className="med-grid" aria-busy="true" aria-label={t('Loading…')}>
@@ -343,11 +548,16 @@ export function MediaTab() {
                 <button
                   key={task.id}
                   type="button"
-                  className="med-tile"
-                  aria-pressed={isSelected}
-                  onClick={() => setSelectedId(task.id)}
+                  className={`med-tile${selecting && picked.has(task.id) ? ' picked' : ''}`}
+                  aria-pressed={selecting ? picked.has(task.id) : isSelected}
+                  onClick={() => (selecting ? togglePick(task.id) : setSelectedId(task.id))}
                 >
                   <span className="med-thumb">
+                    {selecting && (
+                      <span className={`med-check${picked.has(task.id) ? ' on' : ''}`} aria-hidden="true">
+                        {picked.has(task.id) ? '✓' : ''}
+                      </span>
+                    )}
                     {task.url ? (
                       <MediaPreview task={task} className="med-thumb-media" />
                     ) : (
@@ -410,6 +620,43 @@ export function MediaTab() {
                   </div>
                 )}
                 {canCancel(selected) && cancelButton(selected, false)}
+                {isDone(selected) && (
+                  <div className="med-detail-actions">
+                    {(selected.status === 'failed' || selected.status === 'cancelled') && (
+                      <button
+                        type="button"
+                        className="acc2-btn primary"
+                        disabled={!canRetry(selected) || busy !== null}
+                        title={selected.retry_blocker ? t(selected.retry_blocker) : undefined}
+                        onClick={() => void retry(selected)}
+                      >
+                        {t('Thử lại')}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="acc2-btn danger"
+                      disabled={busy !== null}
+                      onClick={() => void removeOne(selected)}
+                    >
+                      {t('Xoá')}
+                    </button>
+                  </div>
+                )}
+                {(selected.status === 'failed' || selected.status === 'cancelled') && selected.retry_blocker && (
+                  <p className="acc2-muted med-detail-note">{t(selected.retry_blocker)}</p>
+                )}
+                {selected.account_id && (
+                  <button
+                    type="button"
+                    className="acc2-btn"
+                    disabled={busy !== null}
+                    title={t('Mở Chrome đã đăng nhập đúng tài khoản Muse xử lý tác vụ này, ngay tại thread của nó')}
+                    onClick={() => void openInAccount(selected)}
+                  >
+                    {busy === `open:${selected.id}` ? t('Đang mở…') : t('Mở trong trình duyệt tài khoản')}
+                  </button>
+                )}
                 {selected.thread_url && (
                   <a className="ov2-link" href={selected.thread_url} target="_blank" rel="noreferrer">
                     {t('Mở thread trên Muse')} →
@@ -480,7 +727,19 @@ export function MediaTab() {
                         <span className="acc2-muted">—</span>
                       )}
                     </td>
-                    <td className="num">{canCancel(task) && cancelButton(task)}</td>
+                    <td className="num med-row-actions">
+                      {canCancel(task) && cancelButton(task)}
+                      {canRetry(task) && (
+                        <button type="button" className="acc2-btn small" disabled={busy !== null} onClick={() => void retry(task)}>
+                          {t('Thử lại')}
+                        </button>
+                      )}
+                      {isDone(task) && (
+                        <button type="button" className="acc2-btn small danger" disabled={busy !== null} onClick={() => void removeOne(task)}>
+                          {t('Xoá')}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

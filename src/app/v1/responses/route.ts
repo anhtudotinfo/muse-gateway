@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
   try {
     const apiKey = apiKeyService.resolveKey(
       req.headers.get('authorization') || req.headers.get('x-api-key'),
-      isRemoteHeaders(req.headers)
+      isRemoteHeaders(req.headers),
+      req.headers.get('origin'),
     );
     if (apiKey === null) {
       return NextResponse.json(

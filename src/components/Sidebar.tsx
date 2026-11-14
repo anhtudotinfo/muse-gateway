@@ -11,6 +11,7 @@ export type TabKey =
   | 'media'
   | 'accounts'
   | 'connect'
+  | 'telegram'
   | 'activity';
 
 const I = (paths: string) => (
@@ -25,6 +26,7 @@ const ICONS: Record<TabKey, React.ReactNode> = {
   accounts: I('M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'),
   media: I('M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21'),
   connect: I('M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'),
+  telegram: I('M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z'),
   activity: I('M22 12h-4l-3 9L9 3l-3 9H2'),
 };
 
@@ -33,6 +35,7 @@ const NAV: { key: TabKey; label: string; href: string }[] = [
   { key: 'media', label: 'Images & videos', href: '/media' },
   { key: 'accounts', label: 'Accounts', href: '/accounts' },
   { key: 'connect', label: 'Connect', href: '/connect' },
+  { key: 'telegram', label: 'Telegram bot', href: '/telegram' },
   { key: 'activity', label: 'Activity', href: '/activity' },
 ];
 

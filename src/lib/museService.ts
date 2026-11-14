@@ -236,8 +236,25 @@ async function launchWithProfileRetry(
   }
 }
 
-// Launch browser with injected cookies
-export async function launchBrowserWithCookies(cookies: string, browserType: string = 'chrome') {
+/** A muse.ai address worth opening (home, a thread…), else null. */
+export function museUrlOrNull(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && (u.hostname === 'muse.ai' || u.hostname.endsWith('.muse.ai')) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Launch browser with injected cookies. `url` (a muse.ai address, e.g. the
+// thread a task ran in) is opened instead of the home page; `proxy` routes
+// the window like the gateway routes that account.
+export async function launchBrowserWithCookies(
+  cookies: string,
+  browserType: string = 'chrome',
+  options: { url?: string | null; proxy?: string | null } = {},
+) {
   const browserInfo = getBrowserExecutable(browserType);
   if (!browserInfo) {
     throw new Error('Không tìm thấy Google Chrome hoặc Microsoft Edge trên máy tính của bạn.');
@@ -245,6 +262,10 @@ export async function launchBrowserWithCookies(cookies: string, browserType: str
 
   const cookieMap = parseCookieString(cookies);
   const puppeteerCookies = formatCookiesForPuppeteer(cookieMap);
+  let proxy: URL | null = null;
+  try {
+    proxy = options.proxy ? new URL(options.proxy) : null;
+  } catch {}
 
   const browser = await launchWithProfileRetry({
     executablePath: browserInfo.path,
@@ -257,16 +278,23 @@ export async function launchBrowserWithCookies(cookies: string, browserType: str
       '--disable-setuid-sandbox',
       '--disable-infobars',
       '--window-name=Muse_Web_Session',
+      ...(proxy ? [`--proxy-server=${proxy.protocol}//${proxy.host}`] : []),
     ],
     ignoreDefaultArgs: ['--enable-automation'],
   });
 
   const pages = await browser.pages();
   const page = pages.length > 0 ? pages[0] : await browser.newPage();
+  if (proxy?.username) {
+    await page.authenticate({
+      username: decodeURIComponent(proxy.username),
+      password: decodeURIComponent(proxy.password || ''),
+    });
+  }
 
   await page.setCookie(...puppeteerCookies);
 
-  await page.goto('https://muse.ai/', {
+  await page.goto(museUrlOrNull(options.url) ?? 'https://muse.ai/', {
     waitUntil: 'domcontentloaded',
     timeout: 30000,
   });

@@ -7,7 +7,7 @@ import type { LicenseView } from '@/lib/license';
 import { useT } from '@/lib/i18n';
 
 const STORE_URL = 'https://www.storetiki.online';
-const SUPPORT_URL = 'https://t.me/ministoretiki_bbqqvv_bot';
+const SUPPORT_URL = 'https://t.me/storetiki_bot';
 
 /** The key's middle part is base64 of the payload, which carries the buyer
  *  email — show only its ends. Copy buttons still copy the full key. */
@@ -251,7 +251,7 @@ export function LicenseTab() {
               api: '/v1/*',
               code: '402 license_required',
               site: 'storetiki.online',
-              tg: '@ministoretiki_bbqqvv_bot',
+              tg: '@storetiki_bot',
             })}
           </p>
           <form className="lic-form" onSubmit={activate}>
@@ -281,7 +281,7 @@ export function LicenseTab() {
         </span>
         <span>
           {t('Hỗ trợ:')}{' '}
-          <a className="ov2-link" href={SUPPORT_URL} target="_blank" rel="noreferrer">Telegram @ministoretiki_bbqqvv_bot</a>
+          <a className="ov2-link" href={SUPPORT_URL} target="_blank" rel="noreferrer">Telegram @storetiki_bot</a>
         </span>
       </section>
 

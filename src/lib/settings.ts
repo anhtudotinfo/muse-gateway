@@ -31,6 +31,16 @@ export interface AppSettings {
   /** Periodically re-test accounts sitting in cooldown and pull them back
    *  into the pool early when their session turns out to be alive. */
   autoHealEnabled: boolean;
+  /** Telegram bot — user self-configured from the dashboard; polls the Bot
+   *  API inside this process and feeds prompts through the same task pool
+   *  as the REST API. Empty token = not configured. */
+  telegramEnabled: boolean;
+  telegramToken: string;
+  telegramRatio: string;
+  telegramDurationSec: number;
+  /** Comma-separated Telegram chat IDs allowed to use the bot. Empty =
+   *  anyone who finds the bot can use it. */
+  telegramAllowedChats: string;
 }
 
 const SETTINGS_FILE = dataPath('settings.json');
@@ -45,6 +55,11 @@ const DEFAULTS: AppSettings = {
   lanesPerAccount: 3,
   lanesMode: 'auto',
   autoHealEnabled: true,
+  telegramEnabled: false,
+  telegramToken: '',
+  telegramRatio: '9:16',
+  telegramDurationSec: 10,
+  telegramAllowedChats: '',
 };
 
 class SettingsService {
@@ -84,8 +99,20 @@ class SettingsService {
 
   patch(patch: Partial<AppSettings>): AppSettings {
     this.load();
-    for (const key of ['requireLogin', 'hasPassword', 'tunnelDashboardAccess', 'keepAliveEnabled', 'maskEmails', 'autoHealEnabled'] as const) {
+    for (const key of ['requireLogin', 'hasPassword', 'tunnelDashboardAccess', 'keepAliveEnabled', 'maskEmails', 'autoHealEnabled', 'telegramEnabled'] as const) {
       if (typeof patch[key] === 'boolean') this.settings[key] = patch[key];
+    }
+    if (typeof patch.telegramToken === 'string') {
+      this.settings.telegramToken = patch.telegramToken.trim();
+    }
+    if (typeof patch.telegramAllowedChats === 'string') {
+      this.settings.telegramAllowedChats = patch.telegramAllowedChats.trim();
+    }
+    if (typeof patch.telegramRatio === 'string' && /^\d{1,2}:\d{1,2}$/.test(patch.telegramRatio.trim())) {
+      this.settings.telegramRatio = patch.telegramRatio.trim();
+    }
+    if (typeof patch.telegramDurationSec === 'number' && patch.telegramDurationSec >= 1 && patch.telegramDurationSec <= 60) {
+      this.settings.telegramDurationSec = Math.round(patch.telegramDurationSec);
     }
     if (typeof patch.keepAliveMin === 'number' && patch.keepAliveMin >= 1 && patch.keepAliveMin <= 1440) {
       this.settings.keepAliveMin = Math.round(patch.keepAliveMin);

@@ -7,6 +7,8 @@ import type { ModelKind } from './modelKind';
 const MAX_PROMPT_CHARS = 20_000;
 const MAX_IMAGES = 16;
 const MAX_DURATION_SEC = 60;
+/** Muse makes up to this many images from one message. */
+export const MAX_IMAGES_PER_REQUEST = 4;
 /** Muse's single-render length — longer asks must spell out the stitching. */
 const SEGMENT_SEC = 10;
 const RATIOS = new Set(['9:16', '16:9', '1:1', '4:3', '3:4']);
@@ -17,6 +19,8 @@ export interface TaskInput {
   images: string[];
   durationSec: number | null;
   ratio: string | null;
+  /** Images to make in this one request (1–4). Image models only. */
+  count: number;
   newChat: boolean;
   thread: string | null;
   account: string | null;
@@ -55,6 +59,10 @@ export function parseTaskInput(body: any): TaskInputResult {
   if (ratio && !RATIOS.has(ratio)) {
     return { ok: false, message: `\`ratio\` must be one of ${[...RATIOS].join(', ')}.` };
   }
+  const count = body.count ?? body.n ?? 1;
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > MAX_IMAGES_PER_REQUEST) {
+    return { ok: false, message: `\`count\` must be a whole number from 1 to ${MAX_IMAGES_PER_REQUEST}.` };
+  }
   return {
     ok: true,
     input: {
@@ -63,6 +71,7 @@ export function parseTaskInput(body: any): TaskInputResult {
       images,
       durationSec: duration === null ? null : Math.round(duration),
       ratio,
+      count,
       newChat: body.new_chat !== false,
       thread: optionalString(body.thread),
       account: optionalString(body.account),
@@ -75,11 +84,14 @@ export function parseTaskInput(body: any): TaskInputResult {
 
 /** Muse has no API fields for length or shape — they travel in the text. */
 export function buildTaskPrompt(
-  { prompt, durationSec, ratio }: Pick<TaskInput, 'prompt' | 'durationSec' | 'ratio'>,
+  { prompt, durationSec, ratio, count = 1 }: Pick<TaskInput, 'prompt' | 'durationSec' | 'ratio'> & { count?: number },
   kind: ModelKind,
 ): string {
   const shape = ratio ? ` tỷ lệ khung hình ${ratio}` : '';
   if (kind === 'image') {
+    // Several images ride one message — Muse returns them together, so N
+    // pictures cost one round trip instead of N.
+    if (count > 1) return `Tạo ${count} ảnh khác nhau${shape}: ${prompt}`;
     return ratio ? `Tạo ảnh${shape}: ${prompt}` : prompt;
   }
   if (kind !== 'video' || (!durationSec && !ratio)) return prompt;

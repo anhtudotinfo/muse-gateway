@@ -161,3 +161,73 @@ test('OpenAI image sizes map to the nearest ratio', () => {
   assert.equal(ratioFromSize('auto'), null);
   assert.equal(ratioFromSize(undefined), null);
 });
+
+test('only real loopback origins count as local for keyless access', async () => {
+  const { isLoopbackOrigin } = await import('./remoteDetect.ts');
+  for (const ok of ['http://localhost:3000', 'http://127.0.0.1:1412', 'http://[::1]:5173', 'tauri://localhost', 'http://tauri.localhost']) {
+    assert.equal(isLoopbackOrigin(ok), true, ok);
+  }
+  for (const bad of ['null', 'https://evil.example', 'http://[::ffff:203.0.113.5]', 'http://localhost.evil.example', 'not a url', '']) {
+    assert.equal(isLoopbackOrigin(bad), false, bad);
+  }
+});
+
+test('zipStream writes a valid stored ZIP that standard tools can read', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { execFileSync } = await import('node:child_process');
+  const { crc32, zipStream } = await import('./zipStream.ts');
+  assert.equal(crc32(Buffer.from('123456789')), 0xcbf43926);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zip-test-'));
+  const a = path.join(dir, 'a.txt');
+  const b = path.join(dir, 'b.bin');
+  fs.writeFileSync(a, 'hello zip');
+  fs.writeFileSync(b, crypto.randomBytes(200_000));
+  const chunks: Buffer[] = [];
+  const reader = zipStream([
+    { name: '01-image-a.txt', path: a },
+    { name: 'missing.png', path: path.join(dir, 'nope.png') },
+    { name: '02-video-b.bin', path: b },
+  ]).getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(Buffer.from(value));
+  }
+  const zip = path.join(dir, 'out.zip');
+  fs.writeFileSync(zip, Buffer.concat(chunks));
+
+  // Windows ships bsdtar (reads ZIP) as System32\tar.exe — the `tar` on PATH
+  // may be GNU tar from Git Bash, which can't. Elsewhere, Info-ZIP.
+  const out = path.join(dir, 'x');
+  fs.mkdirSync(out);
+  let listing: string[];
+  if (process.platform === 'win32') {
+    const bsdtar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    listing = execFileSync(bsdtar, ['-tf', zip], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+    execFileSync(bsdtar, ['-xf', zip, '-C', out]);
+  } else {
+    listing = execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+    execFileSync('unzip', ['-q', zip, '-d', out]);
+  }
+  assert.deepEqual(listing, ['01-image-a.txt', '02-video-b.bin']);
+  assert.equal(fs.readFileSync(path.join(out, '01-image-a.txt'), 'utf8'), 'hello zip');
+  assert.ok(fs.readFileSync(path.join(out, '02-video-b.bin')).equals(fs.readFileSync(b)));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('count asks Muse for several images in one message', () => {
+  const ok = parseTaskInput({ prompt: 'mèo', count: 4, model: 'muse-image' });
+  assert.equal(ok.ok && ok.input.count, 4);
+  assert.equal(parseTaskInput({ prompt: 'x', n: 2 }).ok && (parseTaskInput({ prompt: 'x', n: 2 }) as any).input.count, 2);
+  assert.equal((parseTaskInput({ prompt: 'x' }) as any).input.count, 1);
+  for (const bad of [0, 5, 2.5, '3']) {
+    const r = parseTaskInput({ prompt: 'x', count: bad });
+    assert.equal(r.ok, false, String(bad));
+  }
+  assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: '1:1', count: 4 }, 'image'), 'Tạo 4 ảnh khác nhau tỷ lệ khung hình 1:1: mèo');
+  assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: null, count: 3 }, 'image'), 'Tạo 3 ảnh khác nhau: mèo');
+  assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: null }, 'image'), 'mèo');
+});

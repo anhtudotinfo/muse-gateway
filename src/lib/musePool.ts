@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
@@ -39,7 +40,12 @@ export interface PoolAccountStats {
   lastError: string;
   /** Last time the auto-heal tick re-tested this account's session. */
   lastHealCheck?: number;
+  /** Fingerprint of the cookies that were found dead. New cookies (the user
+   *  logged in again) lift the auth bench without anyone pressing reset. */
+  deadCookies?: string;
 }
+
+const cookieFingerprint = (cookies: string) => crypto.createHash('sha256').update(cookies || '').digest('hex').slice(0, 16);
 
 export interface PoolAccountView extends PoolAccountStats {
   id: string;
@@ -83,9 +89,9 @@ export interface UsageEntry {
 
 const POOL_FILE = dataPath('pool.json');
 const USAGE_FILE = dataPath('usage.jsonl');
-const COOLDOWN_BASE_MS = 5 * 60 * 1000; // transient: 5min, scales with failCount
 const COOLDOWN_MAX_MS = 60 * 60 * 1000; // quota: 1h
 const COOLDOWN_AUTH_MS = 24 * 60 * 60 * 1000; // auth/dead cookie: 24h
+const COOLDOWN_PROXY_AUTH_MS = 30 * 60 * 1000; // suspected dead, can't probe through its proxy
 const MAX_ACCOUNTS_PER_REQUEST = 8;
 // When every account is resting, wait this long for the first one to come
 // back instead of failing the request (and the whole client queue) at once.
@@ -237,6 +243,7 @@ class MusePoolService {
     return {
       strategy: this.state.strategy,
       accounts: getSavedSessions().map((s, i) => {
+        this.liftStaleAuthBench(s);
         const st = this.statsFor(s.id);
         let status: AccountStatus = 'ready';
         if (!st.enabled) status = 'disabled';
@@ -357,6 +364,21 @@ class MusePoolService {
     this.setStats(id, st);
   }
 
+  /** An account benched for a dead session whose cookies have since changed
+   *  (re-login, import) is usable again. */
+  private liftStaleAuthBench(session: Profile): void {
+    const st = this.statsFor(session.id);
+    if (st.cooldownReason !== 'auth' || st.cooldownUntil <= Date.now() || !st.deadCookies) return;
+    if (cookieFingerprint(session.cookies) === st.deadCookies) return;
+    st.cooldownUntil = 0;
+    st.cooldownReason = '';
+    st.failCount = 0;
+    st.lastError = '';
+    st.deadCookies = undefined;
+    this.setStats(session.id, st);
+    console.log(`[MusePool] "${session.name}" có cookie mới — gỡ trạng thái nghỉ do hết đăng nhập`);
+  }
+
   private pickAccount(
     tried: Set<string>,
     accountIds: string[] | null,
@@ -366,6 +388,7 @@ class MusePoolService {
     const candidates = getSavedSessions().filter((s) => {
       if (tried.has(s.id)) return false;
       if (accountIds && !accountIds.includes(s.id)) return false;
+      this.liftStaleAuthBench(s);
       const st = this.statsFor(s.id);
       return st.enabled && st.cooldownUntil <= now;
     });
@@ -384,14 +407,21 @@ class MusePoolService {
     // didn't settle) says nothing about the Muse account. Checked first: the
     // auth pattern below would otherwise catch "Session closed".
     if (
-      /detached|target closed|session closed|protocol error|execution context was destroyed|navigating frame|browser has disconnected|connection closed|net::err|chip preview|attach được ảnh|no reference images could be decoded/.test(
+      /detached|target closed|session closed|protocol error|execution context was destroyed|navigating frame|browser has disconnected|connection closed|net::err|navigation timeout|timeout of \d+ ?ms exceeded|chip preview|attach được ảnh|không gửi được tin lên muse|no reference images could be decoded/.test(
         msg
       )
     )
       return 'infra';
     if (/khung chat|textarea|cookie|session|login|đăng nhập|unauthorized|401|403/.test(msg))
       return 'auth';
-    if (/limit|lượt|quota|upgrade|rate.?limit|429|hết/.test(msg)) return 'quota';
+    // Only Muse actually saying the account is out of uses. Loose words
+    // ("hết", "limit") matched ordinary errors and benched healthy accounts.
+    if (
+      /usage limit|rate.?limit|too many requests|429|quota|hết lượt|hết hạn mức|vượt (quá )?(giới hạn|hạn mức)|đạt giới hạn|upgrade (your |to )?(plan|pro)|nâng cấp (gói|lên)/.test(
+        msg
+      )
+    )
+      return 'quota';
     return 'transient';
   }
 
@@ -535,6 +565,9 @@ class MusePoolService {
         this.applyFailure(acc, err, t0, opts);
         // A browser-side failure gets one more go (the driver opens a fresh
         // page) before the request moves to another account.
+        // Browser-side failures happen before or around sending, so a second
+        // go is safe. Unexplained errors may come after Muse already took the
+        // prompt — resending those would render (and bill) twice.
         if (this.classifyError(err) === 'infra' && !infraRetried.has(acc.id)) {
           infraRetried.add(acc.id);
           console.log(`[MusePool] "${acc.name}" browser error — retrying without cooldown`);
@@ -542,8 +575,9 @@ class MusePoolService {
           continue;
         }
         tried.add(acc.id);
+        const benched = this.statsFor(acc.id).cooldownUntil > Date.now();
         console.log(
-          `[MusePool] Account "${acc.name}" failed (${this.statsFor(acc.id).cooldownReason}) → cooldown, trying next account`
+          `[MusePool] Account "${acc.name}" failed${benched ? ` (${this.statsFor(acc.id).cooldownReason}) → cooldown` : ' (no cooldown)'}, trying next account`
         );
       }
     }
@@ -610,22 +644,31 @@ class MusePoolService {
     museDriver.noteLaneOutcome(acc.id, kind);
     const st = this.statsFor(acc.id);
     st.lastError = String(err?.message || err).slice(0, 300);
-    if (kind === 'infra') {
-      // Logged, but the account stays in rotation: a browser hiccup used to
-      // bench every account at once and fail the whole queue behind it.
+    // Cooldown only on proof the ACCOUNT is the problem: Muse saying it is
+    // out of uses (quota), or a confirmed dead session (auth, see below).
+    // Browser hiccups and unexplained errors keep the account in rotation —
+    // benching on them left one-account users locked out for no reason.
+    if (kind === 'auth' && acc.proxy) {
+      // The session probe can't go through the account's proxy, so there's
+      // no way to confirm — bench briefly instead of retrying a possibly dead
+      // session on every request.
+      st.failCount++;
+      st.cooldownReason = 'auth';
+      st.cooldownUntil = Date.now() + COOLDOWN_PROXY_AUTH_MS;
+      st.deadCookies = cookieFingerprint(acc.cookies);
       this.setStats(acc.id, st);
       this.recordUsage(acc.id, acc.name, false, Date.now() - t0, opts.prompt, String(err?.message || err).slice(0, 200), opts);
       return;
     }
+    if (kind !== 'quota') {
+      this.setStats(acc.id, st);
+      this.recordUsage(acc.id, acc.name, false, Date.now() - t0, opts.prompt, String(err?.message || err).slice(0, 200), opts);
+      if (kind === 'auth') void this.confirmDead(acc);
+      return;
+    }
     st.failCount++;
     st.cooldownReason = kind;
-    st.cooldownUntil =
-      Date.now() +
-      (kind === 'auth'
-        ? COOLDOWN_AUTH_MS
-        : kind === 'quota'
-          ? COOLDOWN_MAX_MS
-          : Math.min(COOLDOWN_BASE_MS * st.failCount, COOLDOWN_MAX_MS));
+    st.cooldownUntil = Date.now() + COOLDOWN_MAX_MS;
     this.setStats(acc.id, st);
     this.recordUsage(
       acc.id,
@@ -636,33 +679,36 @@ class MusePoolService {
       String(err?.message || err).slice(0, 200),
       opts
     );
-    // 'auth' is a heuristic — the error text matched, but the session may be
-    // perfectly fine (page crash, textarea selector miss). Confirm with the
-    // cheap API probe: alive → downgrade to transient cooldown so the account
-    // returns in minutes, not 24h; dead → stamp lastStatus=invalid so the UI
-    // shows DEAD and offers re-login.
-    if (kind === 'auth' && !acc.proxy) {
-      void this.confirmDead(acc);
-    }
   }
 
+  /** 'auth' is a heuristic — the error text matched, but the session may be
+   *  fine (page crash, composer not rendered yet). The cheap API probe
+   *  decides: dead → bench for 24h and mark it so the UI offers re-login;
+   *  alive → nothing happens, the account was never benched. */
+  private probing = new Set<string>();
+
   private async confirmDead(acc: Profile): Promise<void> {
+    // Concurrent failures on one account share a single probe.
+    if (this.probing.has(acc.id)) return;
+    this.probing.add(acc.id);
     try {
       const res = await testSessionOnline(acc.cookies);
-      const st = this.statsFor(acc.id);
       if (res.valid) {
-        // Misclassified — session is alive; treat as transient.
-        if (st.cooldownReason === 'auth') {
-          st.cooldownReason = 'transient';
-          st.cooldownUntil = Date.now() + COOLDOWN_BASE_MS;
-          this.setStats(acc.id, st);
-          console.log(`[MusePool] "${acc.name}" auth-fail nhưng session vẫn sống — giảm cooldown còn ${COOLDOWN_BASE_MS / 60000}m`);
-        }
-      } else {
-        updateSessionTest(acc.id, false);
-        console.log(`[MusePool] "${acc.name}" xác nhận DEAD — session hết hạn, cần đăng nhập lại`);
+        console.log(`[MusePool] "${acc.name}" lỗi giống hết đăng nhập nhưng session vẫn sống — giữ trong pool`);
+        return;
       }
-    } catch {}
+      const st = this.statsFor(acc.id);
+      st.failCount++;
+      st.cooldownReason = 'auth';
+      st.cooldownUntil = Date.now() + COOLDOWN_AUTH_MS;
+      st.deadCookies = cookieFingerprint(acc.cookies);
+      this.setStats(acc.id, st);
+      updateSessionTest(acc.id, false);
+      console.log(`[MusePool] "${acc.name}" xác nhận DEAD — session hết hạn, cần đăng nhập lại`);
+    } catch {
+    } finally {
+      this.probing.delete(acc.id);
+    }
   }
 
   private recordUsage(

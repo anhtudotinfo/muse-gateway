@@ -191,7 +191,7 @@ function writeFile(data: LicenseFile | null): void {
   } catch {}
 }
 
-function appVersion(): string {
+export function appVersion(): string {
   try {
     // Under a global npm install, cwd is the data dir — the app itself
     // (with its real package.json) lives in MUSE_APP_DIR.

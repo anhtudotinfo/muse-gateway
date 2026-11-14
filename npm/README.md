@@ -4,7 +4,7 @@ Self-hosted Muse session pool + OpenAI-compatible gateway (`/v1/chat/completions
 
 > **License required.** Anyone can install and open the dashboard, but the `/v1/*`
 > gateway API stays locked (HTTP 402) until you activate a purchased license key.
-> **Buy a key at https://www.storetiki.online** (floating or HWID-bound, time-limited) — support: Telegram [@ministoretiki_bbqqvv_bot](https://t.me/ministoretiki_bbqqvv_bot).
+> **Buy a key at https://www.storetiki.online** (floating or HWID-bound, time-limited) — support: Telegram [@storetiki_bot](https://t.me/storetiki_bot).
 
 ## Install
 

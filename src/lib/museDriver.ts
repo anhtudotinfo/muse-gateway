@@ -62,6 +62,9 @@ export interface ChatOptions {
   /** What the request must produce (set by the pool from the model or
    *  combo). Image/video wait for media; chat returns once the text settles. */
   kind?: ModelKind | null;
+  /** Images asked for in one message (Muse makes up to 4 at once). The
+   *  reply only counts as done once that many have landed. */
+  imageCount?: number | null;
 }
 
 /** A completed Muse reply — text plus resolved media URLs. */
@@ -82,6 +85,9 @@ export interface ChatResult {
 
 // Max command-execution rounds per user prompt before giving the reply back.
 const MAX_CMD_ROUNDS = 5;
+const RENDERS_PER_ACCOUNT = 2;
+const IMAGE_STALL_MS = 90000;
+const DEAD_CARD_MS = 20000;
 
 /** Parallel pages (tabs) per saved account. Each lane drives its own Muse
  *  thread — Muse renders server-side per conversation, so one account can
@@ -98,22 +104,26 @@ const laneCap = (sessionId: string) => {
 
 /**
  * Automatic lanes: nobody should have to guess how many tabs an account can
- * drive. Each account starts at 2. After a run of clean results while
- * requests were actually queueing for it, it gets one more lane (up to 4,
- * and only with RAM to spare). A browser-side failure or a Muse limit takes
- * one away (down to 1). So it settles where that account and this machine
- * stay reliable.
+ * drive. Each account starts at 2. After two clean results in a row while
+ * requests were actually queueing for it, it gets one more lane (up to 4) —
+ * provided this machine has room for one more tab. A browser-side failure
+ * or a Muse limit takes one away (down to 1). So it settles where that
+ * account and this machine stay reliable.
  */
 class LaneTuner {
   static readonly START = 2;
   static readonly MIN = 1;
   static readonly MAX = 4;
   /** Clean results in a row before trying one more lane. */
-  static readonly GROW_AFTER = 3;
+  static readonly GROW_AFTER = 2;
   /** Growing only helps when work actually waited for this account. */
   static readonly DEMAND_WINDOW_MS = 5 * 60 * 1000;
-  /** Leave this much memory free before opening another tab. */
-  static readonly MIN_FREE_BYTES = 1.5 * 1024 ** 3;
+  /** What one more Muse tab costs (measured ~150–300 MB, rounded up). A
+   *  flat "1.5 GB free" rule kept busy machines at 2 lanes when one more
+   *  tab would have fit easily. */
+  static readonly TAB_BYTES = 350 * 1024 ** 2;
+  /** Kept free for the OS and other apps after the new tab. */
+  static readonly RESERVE_BYTES = 300 * 1024 ** 2;
   private caps = new Map<string, number>();
   private streaks = new Map<string, number>();
   private queuedAt = new Map<string, number>();
@@ -132,7 +142,8 @@ class LaneTuner {
     if (kind === null) {
       const streak = (this.streaks.get(sessionId) ?? 0) + 1;
       const demand = Date.now() - (this.queuedAt.get(sessionId) ?? 0) < LaneTuner.DEMAND_WINDOW_MS;
-      if (streak >= LaneTuner.GROW_AFTER && demand && cap < LaneTuner.MAX && os.freemem() > LaneTuner.MIN_FREE_BYTES) {
+      const roomForTab = os.freemem() > LaneTuner.TAB_BYTES + LaneTuner.RESERVE_BYTES;
+      if (streak >= LaneTuner.GROW_AFTER && demand && cap < LaneTuner.MAX && roomForTab) {
         this.caps.set(sessionId, cap + 1);
         this.streaks.set(sessionId, 0);
         console.log(`[LaneTuner] ${sessionId}: ${cap} → ${cap + 1} lanes (clean run, work queueing)`);
@@ -219,6 +230,10 @@ class MuseDriverService {
   // laneCap() in-flight requests concurrently.
   private busyPages: Set<Page> = new Set();
   private waiting: Set<string> = new Set();
+  // Image/video renders in flight per account. Muse renders about two at
+  // once per account; a third sits server-side for many minutes (measured:
+  // 1004s vs ~230s), so extra renders wait here for one to finish instead.
+  private rendering: Map<string, number> = new Map();
   private lastActiveTime: number = Date.now();
   private idleTimer: NodeJS.Timeout | null = null;
 
@@ -344,10 +359,27 @@ class MuseDriverService {
     await page.setCookie(...formatCookiesForPuppeteer(map));
 
     console.log(`[MuseDriver] Loading https://muse.ai/ for account "${session.name}" ...`);
+    // 'load', not 'networkidle2': muse.ai keeps connections open (analytics,
+    // realtime), so the network never goes idle and every new lane timed out
+    // after 45s even though the page was usable in ~3s. The composer showing
+    // up is the real "ready" signal; if it never does, chat() reports it.
     await page.goto('https://muse.ai/', {
-      waitUntil: 'networkidle2',
+      waitUntil: 'load',
       timeout: 45000,
     });
+    const composer = await page.waitForSelector('textarea', { timeout: 20000 }).catch(() => null);
+    if (!composer) {
+      // An expired session lands on Muse's login screen. Say so in words the
+      // pool classifies as auth (it then confirms and marks the account DEAD
+      // for re-login) — reported as a timeout, it was retried forever.
+      const loggedOut = await page
+        .evaluate(() => /log in or create an account|đăng nhập|continue with meta|meta account/i.test(document.body?.innerText?.slice(0, 3000) || ''))
+        .catch(() => false);
+      if (loggedOut) {
+        await page.close().catch(() => {});
+        throw new Error(`Phiên đăng nhập Muse của "${session.name}" đã hết hạn — Muse hiện trang đăng nhập (login). Hãy đăng nhập lại tài khoản này.`);
+      }
+    }
     // Realtime socket needs a moment after load — sending earlier gets
     // "Delivery not confirmed" and no reply is ever generated.
     await new Promise((r) => setTimeout(r, 3500));
@@ -415,7 +447,7 @@ class MuseDriverService {
     return found;
   }
 
-  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null, model = null, durationSec = null, kind = null }: ChatOptions): Promise<ChatResult> {
+  async chat({ prompt, onChunk = null, signal = null, cwd = null, sessionId = null, images, newChat = null, thread = null, resume = null, model = null, durationSec = null, kind = null, imageCount = null }: ChatOptions): Promise<ChatResult> {
     const outputKind = kind ?? baseKind(model);
     const session = this.resolveSession(sessionId);
 
@@ -424,9 +456,19 @@ class MuseDriverService {
     // fully in parallel; same-account lanes share cookies but drive their
     // own Muse threads.
     this.waiting.add(session.id);
-    const page = await this.acquireLane(session, signal).finally(() =>
-      this.waiting.delete(session.id)
-    );
+    const renders = outputKind !== 'chat';
+    let page: Page;
+    try {
+      if (renders) await this.awaitRenderSlot(session, signal);
+      try {
+        page = await this.acquireLane(session, signal);
+      } catch (err) {
+        if (renders) this.releaseRenderSlot(session.id);
+        throw err;
+      }
+    } finally {
+      this.waiting.delete(session.id);
+    }
 
     this.busyPages.add(page);
     this.lastActiveTime = Date.now();
@@ -450,6 +492,7 @@ class MuseDriverService {
       let lastMediaInfo: MediaInfo[] = [];
       let partial = false;
       const requestedSec = outputKind === 'video' ? requestedVideoSeconds(prompt, durationSec) : null;
+      const expectedImages = outputKind === 'image' ? Math.max(1, Math.min(4, Math.round(imageCount || 1))) : 1;
       const makeResult = (): ChatResult => ({
         text: lastReply || 'Đã gửi yêu cầu đến Muse thành công.',
         media: lastMedia,
@@ -462,6 +505,9 @@ class MuseDriverService {
         accountId: session.id,
       });
       let clarified = false;
+      // Images still owed after Muse under-delivered a multi-image request;
+      // the top-up round asks for just these and appends its media.
+      let topUpFor = 0;
       for (let round = 0; round <= MAX_CMD_ROUNDS; round++) {
         // Buffer this round's stream deltas; only flush to the caller when the
         // round turns out to be the final answer (no command request inside).
@@ -470,8 +516,15 @@ class MuseDriverService {
         // follow-up prompts and must not re-send the bridge frame.
         const result = await this.sendAndAwaitReply(page, toSend, signal, (d) => {
           buffered += d;
-        }, round === 0 ? images : undefined, !!(resume && round === 0), requestedSec, outputKind !== 'chat');
+        }, round === 0 ? images : undefined, !!(resume && round === 0), requestedSec, outputKind !== 'chat', topUpFor || expectedImages);
 
+        if (topUpFor) {
+          // Keep the first round's caption as the reply; only add pictures.
+          lastMedia = [...lastMedia, ...result.media];
+          lastMediaInfo = [...lastMediaInfo, ...(result.mediaInfo ?? [])];
+          if (buffered && onChunk) onChunk(buffered);
+          return makeResult();
+        }
         if (result.text) lastReply = result.text;
         if (result.media.length) {
           lastMedia = result.media;
@@ -500,6 +553,20 @@ class MuseDriverService {
               'Không cần xác nhận thêm — tự chọn phương án hợp lý nhất theo đúng vai trò từng file đính kèm trong yêu cầu ban đầu (khung hình = bối cảnh/tư thế, ảnh chân dung = nhân vật chính phải giống hệt, ảnh trang phục = chỉ lấy đồ). Không hỏi lại — TẠO NGAY media.';
             continue;
           }
+          // Muse sometimes renders fewer pictures than asked ("4 ảnh" with
+          // 3 shown) — ask once, in the same thread, for the missing ones.
+          // It also replies "done — 4 images" with nothing attached at all;
+          // the same nudge re-asks for the whole set.
+          const gotImages = lastMediaInfo.filter((m) => m.kind === 'image').length;
+          if (outputKind === 'image' && result.text && gotImages < expectedImages && !signal?.aborted) {
+            topUpFor = expectedImages - gotImages;
+            console.log(`[MuseDriver] got ${gotImages}/${expectedImages} images — asking for ${topUpFor} more`);
+            if (buffered && onChunk) onChunk(buffered);
+            toSend = gotImages
+              ? `Mới có ${gotImages} ảnh hiển thị. Tạo thêm ${topUpFor} ảnh nữa cùng yêu cầu trên, khác với các ảnh đã có — mỗi ảnh là một file riêng.`
+              : `Chưa có ảnh nào hiển thị trong chat. Tạo lại ${topUpFor} ảnh theo đúng yêu cầu trên — mỗi ảnh là một file riêng.`;
+            continue;
+          }
           if (buffered && onChunk) onChunk(buffered);
           return makeResult();
         }
@@ -520,8 +587,28 @@ class MuseDriverService {
       throw err;
     } finally {
       this.busyPages.delete(page);
+      if (renders) this.releaseRenderSlot(session.id);
       this.resetIdleTimer();
     }
+  }
+
+  private async awaitRenderSlot(session: Profile, signal: AbortSignal | null): Promise<void> {
+    let announced = false;
+    while ((this.rendering.get(session.id) ?? 0) >= RENDERS_PER_ACCOUNT) {
+      if (signal?.aborted) throw new Error('Request aborted by client.');
+      if (!announced) {
+        console.log(`[MuseDriver] queued — "${session.name}" đang render ${RENDERS_PER_ACCOUNT} ảnh/video, request xếp hàng chờ`);
+        announced = true;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    this.rendering.set(session.id, (this.rendering.get(session.id) ?? 0) + 1);
+  }
+
+  private releaseRenderSlot(sessionId: string): void {
+    const n = (this.rendering.get(sessionId) ?? 1) - 1;
+    if (n > 0) this.rendering.set(sessionId, n);
+    else this.rendering.delete(sessionId);
   }
 
   private slotPages(sessionId: string): Page[] {
@@ -955,7 +1042,8 @@ class MuseDriverService {
     images?: string[],
     resume = false,
     requestedSec: number | null = null,
-    wantsMedia = false
+    wantsMedia = false,
+    expectedImages = 1
   ): Promise<ChatResult> {
     try {
       console.log('[MuseDriver] Sending clean prompt to Muse:', cleanPrompt.slice(0, 100));
@@ -1108,26 +1196,49 @@ class MuseDriverService {
         }
 
         // 1. Focus textarea and set value atomically without triggering Enter per line
-        await page.evaluate((textToSet) => {
-          const ta = document.querySelector('textarea') as HTMLTextAreaElement | null;
-          if (ta) {
-            ta.focus();
-            // React synthetic events bypass setter
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-            if (nativeSetter) {
-              nativeSetter.call(ta, textToSet);
-            } else {
-              ta.value = textToSet;
+        const fill = () =>
+          page.evaluate((textToSet) => {
+            const ta = document.querySelector('textarea') as HTMLTextAreaElement | null;
+            if (ta) {
+              ta.focus();
+              // React synthetic events bypass setter
+              const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              if (nativeSetter) {
+                nativeSetter.call(ta, textToSet);
+              } else {
+                ta.value = textToSet;
+              }
+              ta.dispatchEvent(new Event('input', { bubbles: true }));
+              ta.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            ta.dispatchEvent(new Event('input', { bubbles: true }));
-            ta.dispatchEvent(new Event('change', { bubbles: true }));
+          }, cleanPrompt);
+        const stillInComposer = () =>
+          page
+            .evaluate(() => ((document.querySelector('textarea') as HTMLTextAreaElement | null)?.value || '').trim().length > 0)
+            .catch(() => false);
+
+        // 2. Submit with Enter, then make sure it LEFT the composer. On a slow
+        // machine the composer can exist before React wires it up: Enter then
+        // does nothing, no bubble appears, no "delivery failed" either, and
+        // the request used to wait the full 15 minutes for a reply to a
+        // message that was never sent. Muse empties the composer on submit,
+        // so text still sitting there means "not sent" — safe to send again.
+        for (let attempt = 1; ; attempt++) {
+          await fill();
+          await new Promise((r) => setTimeout(r, 150 + attempt * 350));
+          await page.keyboard.press('Enter');
+          let sent = false;
+          for (let t = 0; t < 16 && !sent; t++) {
+            await new Promise((r) => setTimeout(r, 250));
+            sent = !(await stillInComposer());
           }
-        }, cleanPrompt);
-
-        await new Promise((r) => setTimeout(r, 150));
-
-        // 2. Submit the message once by pressing Enter
-        await page.keyboard.press('Enter');
+          if (sent) break;
+          if (attempt >= 3) {
+            throw new Error('Không gửi được tin lên Muse — ô soạn tin không nhận Enter (trang chưa sẵn sàng).');
+          }
+          console.log(`[MuseDriver] message still in the composer — sending again (attempt ${attempt + 1})`);
+          await new Promise((r) => setTimeout(r, 1500));
+        }
       };
       // Resume probe: a client abort can't retract a prompt once it is
       // inside Muse — retrying then re-sends the whole thing and burns a
@@ -1564,14 +1675,23 @@ class MuseDriverService {
           }
           // Spinners / progress bars inside the reply region also mean the
           // generation is still running even when no status text matched.
-          const progEl = document.querySelector(
+          // An image card still showing its skeleton is counted apart: Muse
+          // leaves a card whose generation died server-side as a skeleton
+          // forever (it stays one after a reload — no data ever arrives), so
+          // it must not hold the wait the way a real spinner does.
+          let pendingCards = 0;
+          for (const el of Array.from(document.querySelectorAll(
             '[role="progressbar"], [aria-busy="true"], .animate-spin, .animate-pulse'
-          );
-          if (progEl && inReplyRegion(progEl)) busy = true;
+          ))) {
+            if (!inReplyRegion(el)) continue;
+            if (el.closest('[data-slot="skeleton"]') && el.closest('[data-testid="hatch-chat-attachment-presentation-image"]')) pendingCards++;
+            else busy = true;
+          }
           return {
             reply: lines.join('\n'),
             failed,
             busy,
+            pendingCards,
             media,
             mediaDbg,
             rcFound: !!replyContainer,
@@ -1654,6 +1774,29 @@ class MuseDriverService {
         // Settled-looking text while the render is still running (status
         // lines, video with no duration, a progress indicator) is NOT done —
         // a 10-minute video must keep the wait alive until Muse finishes.
+        // Except a stuck picture: Muse shows some images of a set and leaves
+        // one placeholder spinning forever, which held the reply until the
+        // 15-minute timeout. Images that stopped changing for 90s are the
+        // whole answer (videos legitimately render far longer — not here).
+        const imagesStalled =
+          !requestedSec &&
+          lastMedia.some((m) => m.kind === 'image') &&
+          Date.now() - lastChangeTime > IMAGE_STALL_MS;
+        if (imagesStalled && result.busy) {
+          console.log(`[MuseDriver] images unchanged for ${IMAGE_STALL_MS / 1000}s while Muse still shows a render — taking what arrived`);
+          break;
+        }
+        // Sibling pictures of a set land within seconds of each other; a card
+        // still a skeleton DEAD_CARD_MS after the last one arrived is dead.
+        if (
+          !requestedSec &&
+          (result.pendingCards ?? 0) > 0 &&
+          lastMedia.some((m) => m.kind === 'image') &&
+          Date.now() - lastChangeTime > DEAD_CARD_MS
+        ) {
+          console.log(`[MuseDriver] ${result.pendingCards} image card(s) never loaded (Muse-side failure) — taking what arrived`);
+          break;
+        }
         const stable =
           !result.busy &&
           (lastText.length > 0 || lastMedia.length > 0) &&
@@ -1662,7 +1805,13 @@ class MuseDriverService {
           if (stableSince === null) stableSince = Date.now();
           const graceOver = Date.now() - stableSince > graceMs;
           const onlySegments = isShortVideo(longestVideoSeconds(lastMedia), requestedSec);
-          if ((lastMedia.length > 0 && !onlySegments) || !wantsMedia || graceOver) break;
+          // A multi-image reply fills in one picture at a time: settling on
+          // the first would drop the rest. Wait for all, or for the grace.
+          const enough =
+            expectedImages > 1
+              ? lastMedia.filter((m) => m.kind !== 'video').length >= expectedImages
+              : lastMedia.length > 0;
+          if ((enough && !onlySegments) || !wantsMedia || graceOver) break;
           // else keep polling for late-arriving media or the remaining segments
         } else {
           stableSince = null;
@@ -1710,9 +1859,12 @@ class MuseDriverService {
   // Fetch a page-local blob: URL, persist it under data/media/, return the
   // public /api/media/<file> path (callers turn it absolute per-request).
   private async saveBlobMedia(page: Page, m: MediaItem): Promise<string | null> {
-    const data = await page.evaluate(async (u: string) => {
+    // A blob fetch can hang inside a busy page (seen with parallel renders on
+    // one account) until puppeteer's 3-minute protocol timeout — bound it and
+    // try once more before giving the picture up.
+    const fetchBlob = () => page.evaluate(async (u: string) => {
       try {
-        const r = await fetch(u);
+        const r = await fetch(u, { signal: AbortSignal.timeout(30000) });
         const b = await r.blob();
         if (!b.size || b.size > 512 * 1024 * 1024) return null;
         const buf = new Uint8Array(await b.arrayBuffer());
@@ -1725,6 +1877,11 @@ class MuseDriverService {
         return null;
       }
     }, m.src);
+    const withDeadline = () => Promise.race([
+      fetchBlob(),
+      new Promise<null>((r) => setTimeout(() => r(null), 40000)),
+    ]);
+    const data = (await withDeadline()) ?? (await withDeadline());
     if (!data?.b64) return null;
 
     const byMime: Record<string, string> = {

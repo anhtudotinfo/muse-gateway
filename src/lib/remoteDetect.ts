@@ -38,3 +38,16 @@ export function isRemoteHeaders(headers: Headers): boolean {
   // Direct access via LAN IP / any non-loopback hostname.
   return !isLoopbackHost(headers.get('host'));
 }
+
+/** A browser Origin that is really this machine: localhost (incl. Tauri's
+ *  tauri://localhost and *.localhost) or a loopback IP. "null" (sandboxed
+ *  iframes, file pages) and anything unparseable are NOT local — a web page
+ *  can produce those, so they must not unlock keyless access. */
+export function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}

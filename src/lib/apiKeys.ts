@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { isLoopbackOrigin } from './remoteDetect';
 import crypto from 'crypto';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { dataPath } from './dataDir';
@@ -119,11 +120,15 @@ class ApiKeyService {
    * period: requireAuth on + zero keys = closed, so exposing /v1 through a
    * tunnel is never accidentally public.
    */
-  resolveKey(authHeader: string | null, remote = false): ApiKeyRecord | 'open' | null {
+  resolveKey(authHeader: string | null, remote = false, origin: string | null = null): ApiKeyRecord | 'open' | null {
     this.load();
-    if (!this.requireAuth) return 'open';
+    // Keyless access is for tools on this machine. A web page the user merely
+    // visits can also reach 127.0.0.1 through their browser — it sends an
+    // Origin, so a foreign one (or "null") must present a real key.
+    const open = !origin || isLoopbackOrigin(origin) ? 'open' : null;
+    if (!this.requireAuth) return open;
     const active = this.keys.filter((k) => k.enabled);
-    if (active.length === 0) return remote ? null : 'open';
+    if (active.length === 0) return remote ? null : open;
     const token = (authHeader || '').replace(/^Bearer\s+/i, '').trim();
     if (!token) return null;
     const tb = Buffer.from(token);

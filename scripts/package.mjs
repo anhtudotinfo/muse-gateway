@@ -452,7 +452,7 @@ fs.writeFileSync(
     '',
     '1. Chay CHAY.bat (hoac double-click muse-gateway.exe roi mo http://localhost:1412)',
     '2. Vao tab "Ban quyen", nhap license key de mo khoa API /v1/*',
-    '   Mua key: https://www.storetiki.online — ho tro: Telegram @ministoretiki_bbqqvv_bot',
+    '   Mua key: https://www.storetiki.online — ho tro: Telegram @storetiki_bot',
     '3. Tab Accounts -> them tai khoan Muse -> gateway san sang phuc vu',
     '',
     'Thu muc data/ duoc tao canh exe: chua session, license, API key.',

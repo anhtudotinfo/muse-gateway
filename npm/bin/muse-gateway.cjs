@@ -614,8 +614,155 @@ async function interactiveMenu() {
   process.stdin.on('keypress', onKey);
 }
 
+// ── MCP stdio bridge ──────────────────────────────────────────────────────
+// `muse-gateway mcp` lets stdio-only MCP clients (Claude Desktop, …) use the
+// gateway: each JSON-RPC line from stdin is POSTed to /v1/mcp and the answer
+// written back as one line. stdout carries protocol messages only — anything
+// human-readable goes to stderr. Starts the local gateway when it's down.
+const argValue = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : '';
+};
+
+function runMcpBridge() {
+  const remoteBase = argValue('--url') || process.env.MUSE_GATEWAY_URL || '';
+  const endpoint = `${(remoteBase || BASE).replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/mcp`;
+  const key = argValue('--key') || process.env.MUSE_API_KEY || '';
+  const target = new URL(endpoint);
+  const transport = target.protocol === 'https:' ? https : http;
+  const log = (...a) => process.stderr.write(`[muse-gateway mcp] ${a.join(' ')}\n`);
+  const write = (msg) => process.stdout.write(`${JSON.stringify(msg)}\n`);
+  const idsOf = (msg) =>
+    (Array.isArray(msg) ? msg : [msg]).filter((m) => m && m.id !== undefined && m.id !== null && m.method).map((m) => m.id);
+  const failAll = (msg, message) => {
+    for (const id of idsOf(msg)) write({ jsonrpc: '2.0', id, error: { code: -32000, message } });
+  };
+
+  // Local gateway not running yet: start it in the background (silent —
+  // its output goes to the log file, never to this stdout).
+  const ready = remoteBase ? Promise.resolve(true) : ensureRunning().catch(() => false);
+  // Version negotiated at initialize, sent on later requests as the spec
+  // asks — the gateway uses it to pick content types the client knows.
+  let protocolVersion = '';
+  const noteVersion = (body) => {
+    for (const m of Array.isArray(body) ? body : [body]) {
+      const v = m && m.result && m.result.protocolVersion;
+      if (typeof v === 'string') protocolVersion = v;
+    }
+  };
+
+  const forward = (line, msg) =>
+    new Promise((resolveOnce) => {
+      // Every path below ends here exactly once, so no request is left
+      // unanswered and nothing is written twice.
+      let settled = false;
+      const resolve = () => {
+        if (!settled) {
+          settled = true;
+          resolveOnce();
+        }
+      };
+      const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'Content-Length': Buffer.byteLength(line),
+        'User-Agent': `muse-gateway-mcp/${PKG_VERSION}`,
+      };
+      if (key) headers.Authorization = `Bearer ${key}`;
+      if (protocolVersion) headers['MCP-Protocol-Version'] = protocolVersion;
+      const req = transport.request(target, { method: 'POST', headers, timeout: 180000 }, (res) => {
+        let buf = '';
+        res.setEncoding('utf8');
+        // The gateway dying mid-answer surfaces on the response, not the
+        // request — without these the bridge crashed or waited forever.
+        const lost = (e) => {
+          if (settled) return;
+          failAll(msg, `Muse Gateway connection dropped mid-response (${e?.message || 'aborted'}).`);
+          resolve();
+        };
+        res.on('error', lost);
+        res.on('aborted', () => lost(new Error('aborted')));
+        res.on('close', () => {
+          if (!res.complete) lost(new Error('closed early'));
+        });
+        res.on('data', (c) => (buf += c));
+        res.on('end', () => {
+          if (settled) return;
+          const type = String(res.headers['content-type'] || '');
+          if (res.statusCode === 202 || !buf.trim()) return resolve();
+          if (type.includes('text/event-stream')) {
+            // Relay every SSE message: progress notifications, then the answer.
+            for (const block of buf.split(/\r?\n\r?\n/)) {
+              const data = block
+                .split(/\r?\n/)
+                .filter((l) => l.startsWith('data:'))
+                .map((l) => l.slice(5).trimStart())
+                .join('\n');
+              if (!data) continue;
+              try {
+                write(JSON.parse(data));
+              } catch {}
+            }
+            return resolve();
+          }
+          let body = null;
+          try {
+            body = JSON.parse(buf);
+          } catch {}
+          if (body && !Array.isArray(body) && body.jsonrpc && body.id === null && body.error && idsOf(msg).length) {
+            // An HTTP-level error (bad origin, parse error…) carries no id;
+            // answer each request it belonged to so the client can match it.
+            failAll(msg, body.error.message || `HTTP ${res.statusCode}`);
+          } else if (body && (Array.isArray(body) || body.jsonrpc)) {
+            noteVersion(body);
+            write(body);
+          }
+          else {
+            const detail = body?.error?.message || buf.slice(0, 300);
+            failAll(msg, `Muse Gateway answered HTTP ${res.statusCode}: ${detail}`);
+          }
+          resolve();
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error('timed out')));
+      req.on('error', (e) => {
+        if (settled) return;
+        failAll(msg, `Muse Gateway is not reachable at ${endpoint} (${e.message}). Start it with \`muse-gateway\`.`);
+        resolve();
+      });
+      req.end(line);
+    });
+
+  let pending = 0;
+  let closing = false;
+  const done = () => {
+    pending--;
+    if (closing && pending === 0) process.exit(0);
+  };
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      write({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+      return;
+    }
+    pending++;
+    ready.then(() => forward(line, msg)).finally(done);
+  });
+  rl.on('close', () => {
+    closing = true;
+    if (pending === 0) process.exit(0);
+  });
+  log(`relaying stdio to ${endpoint}${key ? ' (with API key)' : ''}`);
+}
+
 // ── Entry ─────────────────────────────────────────────────────────────────
-if (flag('--help') || flag('-h')) {
+if (args[0] === 'mcp') {
+  runMcpBridge();
+} else if (flag('--help') || flag('-h')) {
   console.log(`Muse Gateway CLI
 
   muse-gateway            interactive menu (arrows + enter)
@@ -625,18 +772,16 @@ if (flag('--help') || flag('-h')) {
   npx muse-gateway        works even when npm's global bin dir is not on PATH
   MUSE_PORT=xxxx muse-gateway  change port (default 1412)
   MUSE_BIND=0.0.0.0 muse-gateway  allow LAN access (default: localhost only)
+  muse-gateway mcp        MCP server over stdio for Claude Desktop & co.
+                          (--key KEY or MUSE_API_KEY; --url for a remote gateway)
 
 Data:  ${DATA_DIR}
 Log:   ${LOG_FILE}`);
   process.exit(0);
-}
-
-if (flag('--version') || flag('-v')) {
+} else if (flag('--version') || flag('-v')) {
   console.log(`muse-gateway v${PKG_VERSION}`);
   process.exit(0);
-}
-
-if (flag('stop')) stopInstance();
+} else if (flag('stop')) stopInstance();
 else if (flag('--open')) {
   ensureRunning().then(openBrowser);
 } else if (flag('--serve') || flag('--tray') || !process.stdin.isTTY) {

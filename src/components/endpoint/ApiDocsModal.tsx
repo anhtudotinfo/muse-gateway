@@ -10,15 +10,19 @@ import type { EndpointKey } from "./types";
 // Integration guide with the chosen endpoint and key filled in, so a user
 // can paste each example into their own tool unchanged.
 
-type Example = "video" | "image" | "status" | "python" | "webhook" | "chat";
+type Example = "video" | "image" | "status" | "manage" | "retry" | "python" | "webhook" | "chat" | "mcp" | "errors";
 
 const EXAMPLES: { id: Example; label: string; hint: string }[] = [
-  { id: "video", label: "Create video", hint: "Starts a 30-second video and returns a task right away." },
+  { id: "video", label: "Create video", hint: "Starts a 10-second video and returns a task right away." },
   { id: "image", label: "Create image", hint: "OpenAI-style image endpoint: model muse-image (or an image combo), size maps to a ratio." },
   { id: "status", label: "Check result", hint: "Poll until status is succeeded or failed. url is the final file." },
+  { id: "manage", label: "List & cancel", hint: "Your key's recent tasks, newest first, and how to stop one." },
+  { id: "retry", label: "Retries & threads", hint: "Resend safely with idempotency_key; continue a result in the same Muse chat." },
   { id: "python", label: "Python", hint: "Create a task and wait for the finished file." },
   { id: "webhook", label: "Webhook", hint: "Verify the signature the gateway sends when a task ends." },
   { id: "chat", label: "Chat", hint: "Plain OpenAI-compatible chat, for tools that only speak that API." },
+  { id: "mcp", label: "MCP", hint: "Let Claude, Cursor and other AI agents create images and videos through this gateway." },
+  { id: "errors", label: "Errors", hint: "Every error has the same JSON shape; the HTTP status says what to fix." },
 ];
 
 function examples(base: string, key: string): Record<Example, string> {
@@ -30,12 +34,20 @@ function examples(base: string, key: string): Record<Example, string> {
   -d '{
     "model": "muse-video",
     "prompt": "A cat playing piano on a rooftop at night",
-    "duration": 30,
+    "duration": 10,
     "ratio": "9:16",
     "images": ["https://example.com/cat.jpg"],
+    "idempotency_key": "order-1234",
     "webhook_url": "https://example.com/hooks/muse",
     "webhook_secret": "choose-a-secret"
-  }'`,
+  }'
+
+# 202 Accepted — the task, still queued:
+# { "id": "task_...", "status": "queued", "url": null, ... }
+#
+# images: URLs or data: URLs — images (20 MB) or video/audio clips (40 MB), up to 16.
+# Muse renders about 10 s per clip reliably; longer durations often come back
+# shorter with "partial": true. For long videos, make 10 s clips and chain them.`,
     image: `curl ${base}/images/generations \\
   -H "Content-Type: application/json"${auth} \\
   -d '{
@@ -53,9 +65,41 @@ function examples(base: string, key: string): Record<Example, string> {
 # {
 #   "id": "task_...", "status": "succeeded",
 #   "url": "${base.replace(/\/v1$/, "")}/api/media/media-....mp4",
-#   "duration_sec": 30.1, "partial": false,
-#   "media": [{ "url": "...", "kind": "video", "duration_sec": 30.1 }]
-# }`,
+#   "duration_sec": 10.0, "partial": false,
+#   "media": [{ "url": "...", "kind": "video", "duration_sec": 10.0 }],
+#   "thread_url": "https://muse.ai/thread/...", "account_id": "session_..."
+# }
+#
+# status: queued → running → succeeded | failed | cancelled
+# partial: true means the clip came back shorter than "duration".
+# Files are served by this gateway (/api/media/...): reachable wherever the
+# gateway is — locally, or through the tunnel's public address.`,
+    manage: `# Recent tasks for this key (newest first, limit 1–100, default 20)
+curl "${base}/tasks?limit=20"${auth.replace(" \\\n", " ")}
+
+# Cancel a queued or running task
+curl -X DELETE ${base}/tasks/TASK_ID${auth.replace(" \\\n", " ")}
+
+# Response: the task with "status": "cancelled". Muse may still finish the
+# render on its side, but the gateway stops waiting for it.`,
+    retry: `# 1) Safe retries — same idempotency_key returns the SAME task instead of a
+#    new render (no double cost after a timeout or a dropped connection).
+curl ${base}/tasks \\
+  -H "Content-Type: application/json"${auth} \\
+  -d '{ "model": "muse-image", "prompt": "Red sneaker on white", "idempotency_key": "sneaker-001" }'
+
+# 2) Continue a result in the same Muse chat (edit it, extend it).
+#    Take thread_url and account_id from the finished task:
+curl ${base}/tasks \\
+  -H "Content-Type: application/json"${auth} \\
+  -d '{
+    "model": "muse-image",
+    "prompt": "Same sneaker, now on a wooden floor",
+    "new_chat": false,
+    "thread": "https://muse.ai/thread/...",
+    "account": "session_..."
+  }'
+# A thread only exists on the account that created it, so pass both.`,
     python: `import time
 import requests
 
@@ -64,7 +108,7 @@ BASE = "${base}"${pyKey}
 task = requests.post(f"{BASE}/tasks", headers=HEADERS, json={
     "model": "muse-video",
     "prompt": "A cat playing piano on a rooftop at night",
-    "duration": 30,
+    "duration": 10,
     "ratio": "9:16",
 }).json()
 
@@ -107,7 +151,56 @@ reply = client.chat.completions.create(
     model="muse-chat",
     messages=[{"role": "user", "content": "Hello"}],
 )
-print(reply.choices[0].message.content)`,
+print(reply.choices[0].message.content)
+
+# Also supported:
+# - stream=True: Server-Sent Events, with keep-alive comments while Muse works
+# - images in the message: {"type": "image_url", "image_url": {"url": "..."}}
+# - model "muse-image" / "muse-video" (or a combo name) returns media links
+# - POST /v1/responses for tools that use the Responses API`,
+    mcp: `# MCP endpoint (Streamable HTTP): ${base}/mcp
+# Tools: generate_image, generate_video, get_task, continue_task,
+#        cancel_task, list_tasks, list_models
+
+# Claude Code
+claude mcp add --transport http muse ${base}/mcp${key ? ` \\
+  --header "Authorization: Bearer ${key}"` : ""}
+
+# Cursor (.cursor/mcp.json) · VS Code (.vscode/mcp.json uses "servers" and "type": "http")
+{
+  "mcpServers": {
+    "muse": {
+      "url": "${base}/mcp"${key ? `,
+      "headers": { "Authorization": "Bearer ${key}" }` : ""}
+    }
+  }
+}
+
+# Claude Desktop (claude_desktop_config.json) — stdio bridge, starts the gateway if needed
+{
+  "mcpServers": {
+    "muse": {
+      "command": "npx",
+      "args": ["-y", "muse-gateway", "mcp"${/^http:\/\/(127\.0\.0\.1|localhost):1412\/v1$/.test(base) ? "" : `, "--url", "${base.replace(/\/v1$/, "")}"`}]${key ? `,
+      "env": { "MUSE_API_KEY": "${key}" }` : ""}
+    }
+  }
+}
+
+# Videos take minutes: generate_video returns a task_id, get_task collects it.
+# Keep clips around 10 s and chain them with continue_task.`,
+    errors: `# Every error looks like this:
+# { "error": { "message": "What went wrong", "type": "invalid_request_error" } }
+#
+# 400 invalid_request_error  bad JSON, missing prompt, duration outside 1–60,
+#                            more than 16 images, an image that can't be loaded
+# 401 authentication_error   missing or wrong API key (remote calls always need one)
+# 402 license_error          no active license on this gateway
+# 403 permission_error       this key isn't allowed to use that model
+# 404                        no such task for this key
+#
+# A task that was accepted (202) and then failed reports it on the task:
+# { "status": "failed", "error": "Muse returned no media: ..." }`,
   };
 }
 
@@ -246,16 +339,32 @@ export default function ApiDocsModal({
           <div className="rounded-lg border border-border-subtle p-3">
             <div className="font-semibold text-text-main mb-1">{t("Models")}</div>
             <code className="font-mono">muse-video</code>, <code className="font-mono">muse-image</code>, <code className="font-mono">muse-chat</code>
+            <div className="mt-1">{t("Any combo name works too. GET /v1/models lists them.")}</div>
           </div>
           <div className="rounded-lg border border-border-subtle p-3">
             <div className="font-semibold text-text-main mb-1">{t("Limits")}</div>
-            {t("Up to 60 s per video, 16 reference images of 20 MB each.")}
+            {t("16 references per request: images up to 20 MB, video or audio clips up to 40 MB. Duration 1–60 s.")}
+          </div>
+          <div className="rounded-lg border border-border-subtle p-3">
+            <div className="font-semibold text-text-main mb-1">{t("Clip length")}</div>
+            {t("About 10 s per clip is reliable. Longer requests often return shorter with partial: true — chain 10 s clips instead.")}
+          </div>
+          <div className="rounded-lg border border-border-subtle p-3">
+            <div className="font-semibold text-text-main mb-1">{t("Webhook")}</div>
+            {t("Events task.succeeded, task.failed, task.cancelled. Retried after 5 s and 30 s. Remote calls must use a public URL.")}
+          </div>
+          <div className="rounded-lg border border-border-subtle p-3">
+            <div className="font-semibold text-text-main mb-1">{t("Queue")}</div>
+            {t("Tasks run as fast as accounts and lanes allow; the rest wait as queued. Repeat idempotency_key to avoid duplicates.")}
           </div>
           <div className="rounded-lg border border-border-subtle p-3">
             <div className="font-semibold text-text-main mb-1">{t("Track jobs")}</div>
-            {t("Every task shows on the Tasks page.")}
+            {t("Every task shows on the Images & videos page.")}
           </div>
         </div>
+        <p className="text-xs text-text-muted">
+          {t("Building an app for this machine? It can connect without the user copying a key: POST /api/pair, the user clicks Allow, then GET /api/pair/<id> returns the key once.")}
+        </p>
       </div>
     </Modal>
   );

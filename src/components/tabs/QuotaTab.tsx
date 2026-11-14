@@ -261,8 +261,8 @@ export function QuotaTab() {
             </>
           ) : (
             <span className="acc2-muted pool-hint">
-              Bắt đầu 2 luồng mỗi tài khoản, tự thêm khi tác vụ chạy ổn và đang có hàng chờ (tối đa 4), tự bớt khi gặp lỗi
-              trình duyệt hoặc Muse giới hạn. Hiện tại:{' '}
+              Bắt đầu 2 luồng mỗi tài khoản, tự thêm sau 2 tác vụ chạy ổn liên tiếp khi đang có hàng chờ và máy còn đủ RAM
+              cho thêm một tab (tối đa 4), tự bớt khi gặp lỗi trình duyệt hoặc Muse giới hạn. Hiện tại:{' '}
               {accounts.filter((a) => a.enabled).length
                 ? accounts
                     .filter((a) => a.enabled)
