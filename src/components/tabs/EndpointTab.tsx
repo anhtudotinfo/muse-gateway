@@ -29,6 +29,8 @@ import StatusAlert, { type StatusAlertStatus } from '@/components/endpoint/Statu
 import KeyAccessControls from '@/components/endpoint/KeyAccessControls';
 import KeySnippetModal from '@/components/endpoint/KeySnippetModal';
 import ApiDocsModal from '@/components/endpoint/ApiDocsModal';
+import { TelegramSection } from '@/components/tabs/TelegramSection';
+import { ConnectRow, type RowView } from '@/components/tabs/ConnectRow';
 import type { EndpointKey, KeyAccess } from '@/components/endpoint/types';
 import { useT } from '@/lib/i18n';
 
@@ -1126,7 +1128,7 @@ export function EndpointTab({ onCopyText }: EndpointTabProps) {
         <div className="con-card-head">
           <div>
             <h2 id="con-ep-title">{t('Địa chỉ endpoint')}</h2>
-            <p>{t('Bật tunnel hoặc Tailscale để gọi gateway từ máy khác.')}</p>
+            <p>{t('Bật tunnel, Tailscale hoặc Telegram bot để gọi gateway từ bên ngoài.')}</p>
           </div>
         </div>
         <ConnectRow
@@ -1138,6 +1140,8 @@ export function EndpointTab({ onCopyText }: EndpointTabProps) {
         />
         <ConnectRow name="Cloudflare tunnel" view={cf} copyId="tunnel_url" copied={copied} onCopy={copyWithToast} />
         <ConnectRow name="Tailscale" view={ts} copyId="ts_url" copied={copied} onCopy={copyWithToast} />
+        {/* Telegram bot row — same connect-row pattern, config lives in a modal */}
+        <TelegramSection />
 
         {/* Security gates: before enabling (login unsafe) and while a remote is live */}
         {((isLoginUnsafe && !anyRemote) || (anyRemote && (!requireApiKey || keys.every((k) => !k.isActive) || isLoginUnsafe))) && (
@@ -1651,59 +1655,6 @@ export function EndpointTab({ onCopyText }: EndpointTabProps) {
 // (sk-muse-xxxxxx…xxxx → sk-muse-xxxx…xxxx).
 function maskShort(key: string): string {
   return key.length > 16 ? `${key.slice(0, 12)}…${key.slice(-4)}` : key;
-}
-
-type RowTone = 'ok' | 'warn' | 'bad' | 'muted';
-
-interface RowView {
-  state: string;
-  tone: RowTone;
-  busy?: boolean;
-  /** Copyable address; when missing the placeholder is shown instead. */
-  url?: string;
-  placeholder: string;
-  action: React.ReactNode;
-  /** Error / progress line under the row. */
-  note?: React.ReactNode;
-}
-
-/** One endpoint row: name + state, the address as a copy button, on/off action. */
-function ConnectRow({ name, view, copyId, copied, onCopy }: {
-  name: string;
-  view: RowView;
-  copyId: string;
-  copied: string | null;
-  onCopy: (text: string, id: string) => void;
-}) {
-  const { t } = useT();
-  return (
-    <div className="con-ep">
-      <div className="con-ep-grid">
-        <div className="con-ep-name">
-          <div className="con-ep-title">{name}</div>
-          <div className={`con-ep-state ${view.tone}`}>
-            {view.busy && <span className="con-spin" aria-hidden="true" />}
-            {view.state}
-          </div>
-        </div>
-        {view.url ? (
-          <button
-            type="button"
-            className="con-url"
-            onClick={() => onCopy(view.url!, copyId)}
-            aria-label={t('Sao chép địa chỉ {url}', { url: view.url })}
-          >
-            <code>{view.url}</code>
-            <span className="con-url-copy">{copied === copyId ? t('Đã sao chép') : t('Sao chép')}</span>
-          </button>
-        ) : (
-          <div className="con-url empty"><span>{view.placeholder}</span></div>
-        )}
-        <div className="con-ep-action">{view.action}</div>
-      </div>
-      {view.note}
-    </div>
-  );
 }
 
 const iconProps = { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, 'aria-hidden': true } as const;

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { NextResponse } from 'next/server';
 import { dataPath } from './dataDir';
 import { onlineEnabled, onlineOk } from './licenseOnline';
+import { LICENSE_REQUIRED } from './licenseMode';
 
 // ── Independent verification ──────────────────────────────────────────────
 // This module does NOT reuse license.ts internals: it re-verifies the stored
@@ -124,6 +125,8 @@ function serverTreeIntact(): boolean {
  * Returns a NextResponse(402) to send back, or null when licensed.
  */
 export function licenseGate(corsHeaders: Record<string, string>): NextResponse | null {
+  // License switched off (licenseMode.ts): the API is open to everyone.
+  if (!LICENSE_REQUIRED) return null;
   if (!licensedNow()) {
     return NextResponse.json(
       {

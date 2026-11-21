@@ -1,7 +1,7 @@
 {
   "name": "muse-gateway",
-  "version": "1.0.10",
-  "description": "Muse Gateway — local Muse session pool & OpenAI-compatible gateway. License key required to unlock /v1/* API.",
+  "version": "1.0.11",
+  "description": "Muse Gateway — local Muse session pool & OpenAI-compatible gateway. Free for everyone, no license key needed.",
   "keywords": ["muse", "gateway", "openai-compatible", "api-pool", "video-generation"],
   "bin": {
     "muse-gateway": "bin/muse-gateway.cjs"
@@ -25,6 +25,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": false
 }

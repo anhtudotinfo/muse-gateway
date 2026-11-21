@@ -2,9 +2,9 @@
 
 Self-hosted Muse session pool + OpenAI-compatible gateway (`/v1/chat/completions`, `/v1/responses`, `/v1/tasks`, `/v1/models`) with a web dashboard and Windows system-tray integration. It runs on your own machine with your own Muse accounts, and any tool that speaks the OpenAI API can use it.
 
-> **License required.** Anyone can install and open the dashboard, but the `/v1/*`
-> gateway API stays locked (HTTP 402) until you activate a purchased license key.
-> **Buy a key at https://www.storetiki.online** (floating or HWID-bound, time-limited) — support: Telegram [@storetiki_bot](https://t.me/storetiki_bot).
+> **Free for everyone.** Every feature, including the `/v1/*` gateway API, works right
+> after install, with no license key. A license key is optional: it gives your gateway its
+> own **fixed tunnel URL**. Support and community: Telegram [@storetiki_bot](https://t.me/storetiki_bot).
 
 ## Install
 
@@ -28,13 +28,13 @@ Opens an interactive menu:
 
 ```
 =======================================================
-  Muse Gateway  v1.0.2
-  Server:  http://127.0.0.1:1412   ● running — pro
+  Muse Gateway  v1.0.11
+  Server:  http://127.0.0.1:1412   ● running — free
 =======================================================
 > Open Dashboard (Web UI)
   Hide to Tray (Background)
   Run in this terminal (foreground)
-  Enter License Key…
+  Enter License Key… (fixed URL)
   Stop Server
   Exit
 ```
@@ -42,22 +42,21 @@ Opens an interactive menu:
 - **Open Dashboard** — starts the server if needed, opens http://127.0.0.1:1412
 - **Hide to Tray** — runs in background with a system-tray icon (Open Dashboard / Auto-start / Quit) and a notification confirming you can close the terminal
 - **Run in this terminal** — foreground server, Ctrl+C to stop
-- **Enter License Key** — paste a `MUSE1.…` key, activates without opening the dashboard
+- **Enter License Key** — optional; paste a `MUSE1.…` key to get a fixed tunnel URL
 
-## Activate a license
+## Fixed tunnel URL (optional license key)
 
-Three ways — all equivalent:
+Every feature works without a key. To expose the gateway on the internet you can
+always start a Cloudflare quick tunnel (random `*.trycloudflare.com` URL that changes
+on restart) or use your own Cloudflare tunnel token and domain.
 
-1. `muse-gateway` menu → **Enter License Key…** → paste the key
-2. Dashboard → **Bản quyền** tab → paste key → **Kích hoạt**
-3. `curl -X POST http://127.0.0.1:1412/api/license -H "content-type: application/json" -d '{"action":"activate","licenseKey":"MUSE1.…"}'`
-
-Until a valid key is activated, every `/v1/*` request returns `402 license_required`.
-The dashboard and `/api/*` management routes always remain available.
+A license key gives you a **fixed URL** instead: activate it (CLI menu, or Dashboard →
+**Bản quyền**), then Dashboard → **Endpoint** → **Bật — URL riêng theo license**.
+Get a key at https://www.storetiki.online or Telegram [@storetiki_bot](https://t.me/storetiki_bot).
 
 ## Connect your tool
 
-After activating and adding a Muse account in the dashboard, use these three values in any tool with a custom OpenAI endpoint:
+After adding a Muse account in the dashboard, use these three values in any tool with a custom OpenAI endpoint:
 
 | Setting | Value |
 |---|---|
@@ -227,7 +226,6 @@ Links appear as text under `Attachments:`, and the final chunk also carries them
 |---|---|
 | `400` | Invalid request, or a reference image couldn't be loaded |
 | `401` | API key missing or wrong |
-| `402` | License not activated |
 | `403` | This key can't use that model |
 | `404` | Task not found, or it belongs to another key |
 
@@ -263,4 +261,4 @@ delete `~/.muse-gateway` for a full reset.
 
 ## License
 
-Commercial — `UNLICENSED`. The gateway API requires a purchased activation key.
+MIT — open source at https://github.com/LynByte/muse-router. All features are free for everyone; a license key only adds a fixed tunnel URL.

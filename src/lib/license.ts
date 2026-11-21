@@ -5,6 +5,7 @@ import path from 'path';
 import { readJsonFile, writeJsonAtomic } from './safeJson';
 import { dataPath } from './dataDir';
 import { onlineEnabled, onlineOk } from './licenseOnline';
+import { LICENSE_REQUIRED } from './licenseMode';
 
 // Offline license system — no license server needed.
 //
@@ -32,6 +33,8 @@ export interface LicenseFile {
 export interface LicenseView {
   product: string;
   version: string;
+  /** false = the license is switched off and every feature is open. */
+  required: boolean;
   licensed: boolean;
   expired: boolean;
   type: 'pro' | 'community' | 'expired' | 'invalid';
@@ -213,6 +216,7 @@ class LicenseService {
     return {
       product: 'muse_gateway',
       version: appVersion(),
+      required: LICENSE_REQUIRED,
       licensed: valid,
       expired,
       type: !lic ? 'community' : expired ? 'expired' : valid ? 'pro' : 'invalid',

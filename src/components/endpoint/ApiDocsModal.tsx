@@ -195,7 +195,6 @@ claude mcp add --transport http muse ${base}/mcp${key ? ` \\
 # 400 invalid_request_error  bad JSON, missing prompt, duration outside 1–60,
 #                            more than 16 images, an image that can't be loaded
 # 401 authentication_error   missing or wrong API key (remote calls always need one)
-# 402 license_error          no active license on this gateway
 # 403 permission_error       this key isn't allowed to use that model
 # 404                        no such task for this key
 #

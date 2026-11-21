@@ -36,3 +36,9 @@ npm test
 ## Release
 
 Follow the runbook in [AGENTS.md](AGENTS.md). Always publish the tarball produced by `npm run package`.
+
+## License
+
+[MIT](LICENSE). Every feature is free. A license key is optional and only provisions a fixed tunnel URL through the license server in [license-server/](license-server/), which you can also deploy yourself.
+
+The gateway drives your own muse.ai accounts through a browser. Check that this fits Muse's terms before using it; you carry the risk of an account being limited.

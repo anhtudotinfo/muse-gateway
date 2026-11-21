@@ -48,7 +48,6 @@ const PAGE_META: Record<string, { title: string; subtitle: string }> = {
   '/media': { title: 'Images & videos', subtitle: 'Ảnh và video tạo qua gateway' },
   '/accounts': { title: 'Accounts', subtitle: 'Phiên đăng nhập Muse, hạn mức và cách pool chia request' },
   '/connect': { title: 'Connect', subtitle: 'Endpoint, API key và cấu hình cho tool của bạn' },
-  '/telegram': { title: 'Telegram bot', subtitle: 'Bot Telegram tự setup — tạo ảnh/video qua pool' },
   '/activity': { title: 'Activity', subtitle: 'Thống kê request và log realtime từ driver & pool' },
   '/license': { title: 'Bản quyền', subtitle: 'License & đăng ký máy — key gắn với HWID' },
 };

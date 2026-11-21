@@ -121,6 +121,8 @@ async function getStatus() {
     if (upd?.current) runningVersion = String(upd.current);
   } catch {}
   return {
+    // Servers before the license switch don't send it: treat as required.
+    required: lic.required !== false,
     licensed: !!lic.licensed,
     type: lic.type || 'community',
     expiresAt: lic.expiresAt || '',
@@ -422,7 +424,9 @@ async function interactiveMenu() {
     lines.push('');
     lines.push(C.cyan(bar));
     const statusText = status
-      ? status.licensed
+      ? !status.required
+        ? C.green(status.licensed ? `● running — ${status.type} (fixed URL)` : '● running — free')
+        : status.licensed
         ? C.green(`● running — ${status.type}${status.expiresAt ? ` (exp ${status.expiresAt.slice(0, 10)})` : ''}`)
         : C.yellow('● running — community (not activated)')
       : C.dim('○ stopped');
@@ -433,7 +437,11 @@ async function interactiveMenu() {
         C.yellow(`  ⚠ Server still running v${status.runningVersion} — "Stop Server" then reopen to load v${PKG_VERSION}.`)
       );
     }
-    if (status && !status.licensed) lines.push(`  ${C.yellow('Get a license:')} ${C.cyan('https://www.storetiki.online')}`);
+    if (status && !status.licensed) {
+      lines.push(status.required
+        ? `  ${C.yellow('Get a license:')} ${C.cyan('https://www.storetiki.online')}`
+        : `  ${C.dim('Fixed tunnel URL key:')} ${C.cyan('https://www.storetiki.online')}`);
+    }
     lines.push(C.cyan(bar));
     items.forEach((it, i) => {
       lines.push(i === sel ? C.cyan(`> ${it.label}`) : `  ${it.label}`);
@@ -448,9 +456,14 @@ async function interactiveMenu() {
     items.push(
       { label: 'Open Dashboard (Web UI)', act: 'open' },
       { label: 'Hide to Tray (Background)', act: 'tray' },
-      { label: 'Run in this terminal (foreground)', act: 'fg' },
-      { label: status?.licensed ? `License: ${status.email || status.type} — change key` : 'Enter License Key…', act: 'key' }
+      { label: 'Run in this terminal (foreground)', act: 'fg' }
     );
+    items.push({
+      label: status?.licensed
+        ? `License: ${status.email || status.type} — change key`
+        : status?.required === false ? 'Enter License Key… (fixed URL)' : 'Enter License Key…',
+      act: 'key',
+    });
     if (status) items.push({ label: 'Stop Server', act: 'stop' });
     items.push({
       label: `Auto-start on Windows login: ${isAutostartEnabled() ? 'ON' : 'OFF'}`,

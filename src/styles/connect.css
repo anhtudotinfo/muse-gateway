@@ -109,7 +109,7 @@
 .con-url code { font-family: var(--font-mono); font-size: 0.74rem; }
 .con-url-copy { flex-shrink: 0; font-size: 0.74rem; color: var(--text-secondary); }
 .con-url.empty { cursor: default; font-size: 0.78rem; color: var(--text-tertiary); }
-.con-ep-action { display: flex; justify-content: flex-end; }
+.con-ep-action { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .con-ep-default { padding: 0 14px; font-size: 0.78rem; color: var(--text-tertiary); }
 .con-ep-note {
   display: flex;

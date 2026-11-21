@@ -120,7 +120,7 @@ export function LicenseTab() {
     await fetch('/api/license', { method: 'DELETE' });
     setLic(null);
     setFormKey('');
-    showToast(t('Đã gỡ license — về bản community'), 'info');
+    showToast(t('Đã gỡ license — về bản miễn phí'), 'info');
     refresh();
   };
 
@@ -143,7 +143,7 @@ export function LicenseTab() {
       })()
     : lic?.licensed
       ? t('Không giới hạn thời gian')
-      : t('API /v1 đang khoá cho tới khi kích hoạt license.');
+      : t('Bản miễn phí — đủ mọi tính năng. Kích hoạt key để nhận URL cố định.');
 
   const copyLabel = t('Sao chép');
 
@@ -179,7 +179,7 @@ export function LicenseTab() {
               {verifying ? t('Đang kiểm tra…') : t('Kiểm tra lại')}
             </button>
             <a className="acc2-btn primary" href={STORE_URL} target="_blank" rel="noreferrer">
-              {lic?.licensed ? t('Gia hạn') : t('Mua key')}
+              {lic?.licensed ? t('Gia hạn') : t('Nhận key')}
             </a>
           </div>
           {lic?.reason && !lic.licensed && lic.type !== 'community' && (
@@ -247,9 +247,7 @@ export function LicenseTab() {
       {loaded && !lic?.licensed && (
         <section className="acc2-card lic-activate" aria-label={t('Kích hoạt license')}>
           <p className="lic-notice">
-            {t('Gateway API {api} đang khóa — mọi request trả {code}. Mua license key tại {site} hoặc nhắn Telegram {tg}, rồi dán key vào ô bên dưới.', {
-              api: '/v1/*',
-              code: '402 license_required',
+            {t('Mọi tính năng đều miễn phí. License key dùng để cấp tunnel URL cố định riêng cho gateway của bạn — nhận key tại {site} hoặc nhắn Telegram {tg}, rồi dán vào ô bên dưới.', {
               site: 'storetiki.online',
               tg: '@storetiki_bot',
             })}
@@ -276,7 +274,7 @@ export function LicenseTab() {
 
       <section className="lic-support" aria-label={t('Hỗ trợ')}>
         <span>
-          {t('Mua key:')}{' '}
+          {t('Nhận key:')}{' '}
           <a className="ov2-link" href={STORE_URL} target="_blank" rel="noreferrer">storetiki.online</a>
         </span>
         <span>
@@ -289,7 +287,7 @@ export function LicenseTab() {
         <section className="lic-danger" aria-label={t('Gỡ bản quyền')}>
           <div>
             <div className="lic-danger-title">{t('Gỡ license khỏi máy này')}</div>
-            <div className="acc2-muted">{t('API /v1 sẽ đóng cho tới khi kích hoạt lại.')}</div>
+            <div className="acc2-muted">{t('URL cố định cấp theo license sẽ ngừng cho tới khi kích hoạt lại. Các tính năng khác vẫn dùng bình thường.')}</div>
           </div>
           <button type="button" className="acc2-btn lic-danger-btn" onClick={remove}>
             {t('Gỡ license')}

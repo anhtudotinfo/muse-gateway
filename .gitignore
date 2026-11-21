@@ -11,3 +11,4 @@ license-server/db.json
 license-server/*.tmp
 
 license-server/.*
+.wrangler/

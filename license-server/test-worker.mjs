@@ -2,9 +2,12 @@
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-const BASE = 'https://license.storetiki.online';
-const KEY = 'MUSE1.REDACTED';
-const HWID = 'TEST1-HWID1-AAAAA';
+// Point at a deployed worker and a key minted for testing (never commit one):
+//   MUSE_LICENSE_SERVER=https://… MUSE_TEST_KEY=MUSE1.… node test-worker.mjs
+// MUSE_TEST_KEY falls back to ./.minted-test.key (gitignored).
+const BASE = (process.env.MUSE_LICENSE_SERVER || 'https://license.storetiki.online').replace(/\/+$/, '');
+const KEY = (process.env.MUSE_TEST_KEY || readFileSync(new URL('./.minted-test.key', import.meta.url), 'utf8')).trim();
+const HWID = process.env.MUSE_TEST_HWID || 'TEST1-HWID1-AAAAA';
 const HWID2 = 'AAAAA-BBBBB-CCCCC';
 const TOKEN = readFileSync(new URL('./.admin-token', import.meta.url), 'utf8').trim();
 const PUB = readFileSync(new URL('./.pub.tmp', import.meta.url), 'utf8');

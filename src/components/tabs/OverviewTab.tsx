@@ -117,14 +117,14 @@ export function OverviewTab() {
       desc: t('Vào trang {tab} — đăng nhập Muse bằng trình duyệt hoặc dán cookie của tài khoản đầu tiên.', { tab: t('Accounts') }),
     },
     {
-      icon: 'key',
-      title: t('Kích hoạt license'),
-      desc: t('Vào tab {tab} — nhập license key để mở Gateway API {api} và cấp tunnel URL riêng.', { tab: t('Bản quyền'), api: '/v1/*' }),
-    },
-    {
       icon: 'vpn_key',
       title: t('Tạo API key & trỏ client'),
       desc: t('Vào trang {tab} — tạo key rồi trỏ client vào {url}.', { tab: t('Connect'), url: endpoint || 'http://localhost:1412/v1' }),
+    },
+    {
+      icon: 'key',
+      title: t('Nhận URL cố định (tuỳ chọn)'),
+      desc: t('Vào tab {tab} — nhập license key để được cấp tunnel URL cố định riêng. Không có key vẫn dùng đủ mọi tính năng.', { tab: t('Bản quyền') }),
     },
   ];
 

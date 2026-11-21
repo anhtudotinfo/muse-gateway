@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
     {
       service: 'muse-gateway',
       version: license.version,
-      licensed: license.licensed,
+      // Apps such as SparkCut lock generation on this flag; with the
+      // license switched off every gateway counts as unlocked.
+      licensed: license.licensed || !license.required,
       accounts: {
         total: accounts.length,
         ready: accounts.filter((a) => a.enabled && a.status !== 'cooldown' && a.status !== 'disabled').length,

@@ -2,6 +2,11 @@ name = "muse-license"
 main = "worker.js"
 compatibility_date = "2024-09-01"
 
+# Public endpoint baked into the app (src/lib/licenseOnline.ts). The old
+# *.workers.dev URL stays on so already-installed builds keep verifying.
+workers_dev = true
+routes = [{ pattern = "license.storetiki.online", custom_domain = true }]
+
 # npx wrangler kv namespace create LICENSE_KV → paste the printed id here
 [[kv_namespaces]]
 binding = "LICENSE_KV"

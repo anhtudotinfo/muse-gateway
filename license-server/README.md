@@ -52,7 +52,7 @@ keys re-bind on next activation (self-healing), but revoke history resets.
 
 ```ts
 // src/lib/licenseOnline.ts
-const BAKED_SERVER = 'https://muse-license.<subdomain>.workers.dev';
+const BAKED_SERVER = 'https://license.example.com'; // or https://muse-license.<subdomain>.workers.dev
 ```
 
 Then `npm run package`. Any install built after that requires the server for
