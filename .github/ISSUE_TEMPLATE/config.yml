@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Telegram support
+    url: https://t.me/storetiki_bot
+    about: Quick questions and help with setup

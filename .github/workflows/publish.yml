@@ -7,7 +7,7 @@
 #   1. Push this repo to GitHub (the org/user must match step 2).
 #   2. npmjs.com → package muse-gateway → Settings → Publishing Access →
 #      "Configure a Trusted Publisher" → GitHub Actions →
-#      Repository owner: <you> · Repository: muse-router ·
+#      Repository owner: lynbyte · Repository: muse-gateway ·
 #      Workflow filename: publish.yml
 #   3. Tag a release:  git tag v1.0.1 && git push origin v1.0.1
 #      (or run the workflow manually from the Actions tab)

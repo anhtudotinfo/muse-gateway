@@ -10,7 +10,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Release runbook — publishing `muse-gateway` to npm
 
-The npm package `muse-gateway` ships the obfuscated standalone build as `app/` —
+The npm package `muse-gateway` ships the standalone build as `app/` —
 `npm/` alone is NOT publishable (it lacks the app payload; `npm pack` there
 produces a broken install). Always publish the tarball `package.mjs` produces.
 
