@@ -261,4 +261,4 @@ delete `~/.muse-gateway` for a full reset.
 
 ## License
 
-MIT — open source at https://github.com/LynByte/muse-router. All features are free for everyone; a license key only adds a fixed tunnel URL.
+MIT — open source at https://github.com/lynbyte/muse-gateway. All features are free for everyone; a license key only adds a fixed tunnel URL.

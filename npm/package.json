@@ -26,5 +26,11 @@
     "access": "public"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lynbyte/muse-gateway.git"
+  },
+  "homepage": "https://github.com/lynbyte/muse-gateway#readme",
+  "bugs": "https://github.com/lynbyte/muse-gateway/issues",
   "private": false
 }
