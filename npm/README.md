@@ -28,7 +28,7 @@ Opens an interactive menu:
 
 ```
 =======================================================
-  Muse Gateway  v1.0.11
+  Muse Gateway  v1.0.12
   Server:  http://127.0.0.1:1412   ● running — free
 =======================================================
 > Open Dashboard (Web UI)
