@@ -10,7 +10,7 @@ import { useApp } from '@/components/AppShell';
 import { HeaderSlot } from '@/components/HeaderSlot';
 import { maskName } from '@/lib/mask';
 import type { PoolAccountView } from '@/lib/musePool';
-import { MediaPreview, isVideo, localMediaUrl, type DashboardTask } from '@/components/tabs/MediaTab';
+import { MediaPreview, displayPrompt, isAudio, isVideo, localMediaUrl, type DashboardTask } from '@/components/tabs/MediaTab';
 
 interface OverviewData {
   strategy: string;
@@ -141,7 +141,7 @@ export function OverviewTab() {
       sub: yesterdayRate !== null ? t('Hôm qua {n}%', { n: yesterdayRate }) : t('Tính trên mọi request'),
     },
     {
-      label: t('Ảnh & video hôm nay'),
+      label: t('Media hôm nay'),
       value: media ? fmtNum(mediaToday) : '',
       sub: media ? t('Tổng {n} file', { n: fmtNum(media.total) }) : '',
     },
@@ -284,7 +284,7 @@ export function OverviewTab() {
         <section className="ov2-results" aria-label={t('Kết quả mới')}>
           <div className="ov2-section-head">
             <h2>{t('Kết quả mới')}</h2>
-            <Link href="/media" className="ov2-link">{t('Xem tất cả ảnh & video')} →</Link>
+            <Link href="/media" className="ov2-link">{t('Xem tất cả media')} →</Link>
           </div>
           {!ov ? (
             <div className="ov2-gallery">
@@ -293,14 +293,14 @@ export function OverviewTab() {
           ) : results.length ? (
             <div className="ov2-gallery">
               {results.map((task) => (
-                <a key={task.id} href={localMediaUrl(task.url!)} target="_blank" rel="noreferrer" className="ov2-tile" title={task.prompt}>
+                <a key={task.id} href={localMediaUrl(task.url!)} target="_blank" rel="noreferrer" className="ov2-tile" title={displayPrompt(task)}>
                   <span className="ov2-thumb">
                     <MediaPreview task={task} />
                     <span className="ov2-thumb-tag">
-                      {isVideo(task) ? (task.duration_sec ? `${Math.round(task.duration_sec)}s` : t('Video')) : t('Ảnh')}
+                      {isAudio(task) ? (task.duration_sec ? `${Math.round(task.duration_sec)}s` : t('Giọng nói')) : isVideo(task) ? (task.duration_sec ? `${Math.round(task.duration_sec)}s` : t('Video')) : t('Ảnh')}
                     </span>
                   </span>
-                  <span className="ov2-tile-caption">{task.prompt}</span>
+                  <span className="ov2-tile-caption">{displayPrompt(task)}</span>
                 </a>
               ))}
             </div>

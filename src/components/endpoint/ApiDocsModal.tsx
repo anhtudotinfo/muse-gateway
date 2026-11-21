@@ -10,11 +10,12 @@ import type { EndpointKey } from "./types";
 // Integration guide with the chosen endpoint and key filled in, so a user
 // can paste each example into their own tool unchanged.
 
-type Example = "video" | "image" | "status" | "manage" | "retry" | "python" | "webhook" | "chat" | "mcp" | "errors";
+type Example = "video" | "image" | "speech" | "status" | "manage" | "retry" | "python" | "webhook" | "chat" | "mcp" | "errors";
 
 const EXAMPLES: { id: Example; label: string; hint: string }[] = [
   { id: "video", label: "Create video", hint: "Starts a 10-second video and returns a task right away." },
   { id: "image", label: "Create image", hint: "OpenAI-style image endpoint: model muse-image (or an image combo), size maps to a ratio." },
+  { id: "speech", label: "Create voice", hint: "OpenAI-style text-to-speech: model muse-voice, any Muse voice name; the response is the mp3." },
   { id: "status", label: "Check result", hint: "Poll until status is succeeded or failed. url is the final file." },
   { id: "manage", label: "List & cancel", hint: "Your key's recent tasks, newest first, and how to stop one." },
   { id: "retry", label: "Retries & threads", hint: "Resend safely with idempotency_key; continue a result in the same Muse chat." },
@@ -59,6 +60,29 @@ function examples(base: string, key: string): Record<Example, string> {
 # Response:
 # { "created": 1793600000,
 #   "data": [{ "url": "${base.replace(/\/v1$/, "")}/api/media/media-....webp", "revised_prompt": "..." }] }`,
+    speech: `curl ${base}/audio/speech \\
+  -H "Content-Type: application/json"${auth} \\
+  -d '{
+    "model": "muse-voice",
+    "input": "Xin chào các bạn",
+    "voice": "Glad Kite",
+    "speed": 1
+  }' \\
+  --output speech.mp3
+
+# The response body is the mp3 (audio/mpeg).
+# voice: any of Muse's 1,219 voice names, written exactly.
+#   Vietnamese: Glad Kite (F, default), Breathless Rosette (F), Sparkling Whistle (F),
+#     Kindhearted Jetty (M), Questioning Satchel (M), Tenacious Mooring (M), Zealous Harbor (M)
+#   English: Aria (F), Mellow Saxophone (F), Soothing Ribbon (F, British),
+#     Helio (M), Warm Pebble (M), Boomy Mountain (M, British)
+#   OpenAI names (alloy, nova, onyx, ...) are mapped to one of these.
+# language: "vi", "en", ... (unset: detected from the text). speed: 0.25–4.
+# Up to 4,096 characters, about 30 s to make.
+#
+# Longer text (up to 6,000 characters, ~5 min of speech): POST /v1/tasks with
+# {"model": "muse-voice", "prompt": "...", "voice": "..."}; the finished task's
+# url is the mp3 and duration_sec its length.`,
     status: `curl ${base}/tasks/TASK_ID${auth.replace(" \\\n", " ")}
 
 # Response when finished:
@@ -159,7 +183,7 @@ print(reply.choices[0].message.content)
 # - model "muse-image" / "muse-video" (or a combo name) returns media links
 # - POST /v1/responses for tools that use the Responses API`,
     mcp: `# MCP endpoint (Streamable HTTP): ${base}/mcp
-# Tools: generate_image, generate_video, get_task, continue_task,
+# Tools: generate_image, generate_video, generate_speech, get_task, continue_task,
 #        cancel_task, list_tasks, list_models
 
 # Claude Code
@@ -337,7 +361,7 @@ export default function ApiDocsModal({
         <div className="grid gap-2 sm:grid-cols-3 text-xs text-text-muted">
           <div className="rounded-lg border border-border-subtle p-3">
             <div className="font-semibold text-text-main mb-1">{t("Models")}</div>
-            <code className="font-mono">muse-video</code>, <code className="font-mono">muse-image</code>, <code className="font-mono">muse-chat</code>
+            <code className="font-mono">muse-video</code>, <code className="font-mono">muse-image</code>, <code className="font-mono">muse-voice</code>, <code className="font-mono">muse-chat</code>
             <div className="mt-1">{t("Any combo name works too. GET /v1/models lists them.")}</div>
           </div>
           <div className="rounded-lg border border-border-subtle p-3">
@@ -358,7 +382,7 @@ export default function ApiDocsModal({
           </div>
           <div className="rounded-lg border border-border-subtle p-3">
             <div className="font-semibold text-text-main mb-1">{t("Track jobs")}</div>
-            {t("Every task shows on the Images & videos page.")}
+            {t("Every task shows on the Media page.")}
           </div>
         </div>
         <p className="text-xs text-text-muted">

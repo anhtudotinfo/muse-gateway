@@ -7,6 +7,7 @@ import { MEDIA_DIR } from '@/lib/mediaStore';
 import { baseKind } from '@/lib/modelKind';
 import { SUPPORTED_MODELS } from '@/lib/museDriver';
 import { musePool } from '@/lib/musePool';
+import { MAX_SPEECH_TASK_CHARS, speechTextError } from '@/lib/speech';
 import { parseTaskInput } from '@/lib/taskInput';
 import { taskService, taskView } from '@/lib/tasks';
 import { McpToolError, type McpBackend, type McpTask, type TaskKind } from './core';
@@ -77,9 +78,16 @@ export function createMcpBackend(caller: ApiCaller, request: { origin: string; u
         thread: args.thread,
         account: args.account,
         idempotency_key: args.idempotencyKey,
+        voice: args.voice ?? undefined,
+        language: args.language ?? undefined,
+        speed: args.speed ?? undefined,
       });
       if (parsed.ok === false) throw new McpToolError(parsed.message);
       const { input } = parsed;
+      if (musePool.kindOf(input.model) === 'audio') {
+        const tooLong = speechTextError(input.prompt, 'text', MAX_SPEECH_TASK_CHARS);
+        if (tooLong) throw new McpToolError(tooLong);
+      }
       if (input.idempotencyKey) {
         const existing = taskService.findByIdempotencyKey(input.idempotencyKey, owner);
         if (existing) return toMcpTask(taskView(existing));
@@ -120,7 +128,7 @@ export function createMcpBackend(caller: ApiCaller, request: { origin: string; u
         ...SUPPORTED_MODELS.map((m) => ({ id: m.id, kind: baseKind(m.id) })),
         ...musePool.getCombos().map((c) => ({ id: c.name, kind: c.kind })),
       ];
-      // No chat tool here — only what the image and video tools can use.
+      // No chat tool here — only what the image, video and speech tools can use.
       return all.filter((m) => m.kind !== 'chat' && this.allowsModel(m.id));
     },
 

@@ -5,6 +5,7 @@ import { taskService } from './tasks';
 import { licenseGate } from './licenseGate';
 import { MEDIA_DIR, markMediaServed } from './mediaStore';
 import { parseTaskInput } from './taskInput';
+import { COMMON_VOICES, MAX_SPEECH_TASK_CHARS, parseVoiceCommand, speechOf, speechTextError } from './speech';
 
 // Built-in Telegram bot — the user-facing "chat with the gateway" surface.
 // Long-polls the Bot API inside this process (no public webhook needed) and
@@ -245,6 +246,8 @@ class TelegramBotService {
       commands: [
         { command: 'vid', description: 'Tạo video — /vid [tỉ lệ] [Ns] <prompt>' },
         { command: 'img', description: 'Tạo ảnh — /img [số] [tỉ lệ] <prompt>' },
+        { command: 'voice', description: 'Đọc văn bản thành giọng nói — /voice [nam|nữ] [1.2x] <văn bản>' },
+        { command: 'voices', description: 'Danh sách giọng hay dùng' },
         { command: 'help', description: 'Hướng dẫn dùng bot' },
       ],
     }).then((r) => {
@@ -292,7 +295,7 @@ class TelegramBotService {
     const chatId: number | undefined = msg?.chat?.id;
     if (chatId === undefined) return;
 
-    const m = text.match(/^\/(vid|video|v|img|image|i|start|help|commands)(@\w+)?\b/i);
+    const m = text.match(/^\/(vid|video|v|img|image|i|voices|voice|tts|start|help|commands)(@\w+)?\b/i);
     const mention = this.username ? new RegExp(`@${this.username}\\b`, 'i') : null;
     const mentioned = mention ? mention.test(text) : false;
     const replyToBot = !!this.username && msg?.reply_to_message?.from?.username === this.username;
@@ -329,9 +332,37 @@ class TelegramBotService {
           `Tỉ lệ: ${RATIOS.join(', ')} (hoặc gõ "dọc"/"ngang"/"vuông"). Thời lượng ≤ ${MAX_DURATION}s, tối đa ${MAX_COUNT} ảnh/lần.`,
           `Gửi kèm 1 ảnh = ảnh tham chiếu. Prompt trần cũng hiểu: "tạo ảnh mèo" → ảnh, "quay mèo" → video.`,
           '',
+          `/voice <văn bản> — đọc thành file mp3 (tiếng Việt tự chọn giọng Việt)`,
+          `/voice [nam] [1.2x] <văn bản> — giọng nam, nhanh 1.2 lần`,
+          `/voice [Kindhearted Jetty] <văn bản> — chọn giọng theo tên`,
+          `Trả lời (reply) một tin nhắn bằng /voice để đọc tin đó. Tối đa ${MAX_SPEECH_TASK_CHARS.toLocaleString('en-US')} ký tự. /voices xem danh sách giọng.`,
+          '',
           `Chat ID: ${chatId}`,
         ].join('\n'),
       );
+      return;
+    }
+
+    if (m && m[1].toLowerCase() === 'voices') {
+      const line = (v: (typeof COMMON_VOICES)[number]) => `• ${v.name} — ${v.gender === 'F' ? 'nữ' : 'nam'}, ${v.character}`;
+      await this.reply(
+        chatId,
+        [
+          'Giọng tiếng Việt:',
+          ...COMMON_VOICES.filter((v) => v.accent === 'Vietnamese').map(line),
+          '',
+          'Giọng tiếng Anh:',
+          ...COMMON_VOICES.filter((v) => v.accent !== 'Vietnamese').map((v) => `${line(v)} (${v.accent})`),
+          '',
+          'Muse có 1.219 giọng; gõ đúng tên trong ngoặc vuông: /voice [Glad Kite] Xin chào',
+        ].join('\n'),
+        msg?.message_id,
+      );
+      return;
+    }
+
+    if (m && ['voice', 'tts'].includes(m[1].toLowerCase())) {
+      await this.speak(chatId, text.slice(m[0].length), msg);
       return;
     }
 
@@ -344,7 +375,7 @@ class TelegramBotService {
       kind = 'video';
       body = text.slice(m[0].length);
     } else if (text.startsWith('/')) {
-      await this.reply(chatId, 'Lệnh không biết. /vid cho video, /img cho ảnh, /help xem hướng dẫn.');
+      await this.reply(chatId, 'Lệnh không biết. /vid cho video, /img cho ảnh, /voice cho giọng nói, /help xem hướng dẫn.');
       return;
     } else {
       // Bare prompt — sniff the intent word so "tạo ảnh mèo" really makes
@@ -408,10 +439,38 @@ class TelegramBotService {
     }
   }
 
+  /** /voice: read the text (or the replied-to message) aloud as an mp3. */
+  private async speak(chatId: number, body: string, msg: any) {
+    const replyTo: number | undefined = msg?.message_id;
+    const command = parseVoiceCommand(body);
+    if (command.ok === false) {
+      await this.reply(chatId, command.message, replyTo);
+      return;
+    }
+    const quoted: string = (msg?.reply_to_message?.text ?? msg?.reply_to_message?.caption ?? '').trim();
+    const text = command.text || quoted;
+    if (!text) {
+      await this.reply(chatId, 'Thiếu văn bản. Ví dụ: /voice Xin chào các bạn — hoặc trả lời một tin nhắn bằng /voice để đọc tin đó.', replyTo);
+      return;
+    }
+    const tooLong = speechTextError(text, 'văn bản', MAX_SPEECH_TASK_CHARS);
+    if (tooLong) {
+      await this.reply(chatId, `Văn bản dài ${text.length.toLocaleString('en-US')} ký tự — tối đa ${MAX_SPEECH_TASK_CHARS.toLocaleString('en-US')}. Chia nhỏ rồi gửi từng phần.`, replyTo);
+      return;
+    }
+    await this.generate(
+      chatId,
+      'audio',
+      { prompt: text, ratio: null, durationSec: null, count: 1, voice: command.voice, speed: command.speed },
+      [],
+      replyTo,
+    );
+  }
+
   private async generate(
     chatId: number,
-    kind: 'video' | 'image',
-    req: { prompt: string; ratio: string | null; durationSec: number | null; count: number },
+    kind: 'video' | 'image' | 'audio',
+    req: { prompt: string; ratio: string | null; durationSec: number | null; count: number; voice?: string | null; speed?: number | null },
     images: string[] = [],
     replyTo?: number,
   ) {
@@ -428,11 +487,13 @@ class TelegramBotService {
         return;
       }
       const parsed = parseTaskInput({
-        model: kind === 'image' ? 'muse-image' : 'muse-video',
+        model: kind === 'image' ? 'muse-image' : kind === 'audio' ? 'muse-voice' : 'muse-video',
         prompt: req.prompt,
         ratio: req.ratio ?? undefined,
         duration: kind === 'video' ? req.durationSec ?? undefined : undefined,
         count: kind === 'image' ? req.count : 1,
+        voice: req.voice ?? undefined,
+        speed: req.speed ?? undefined,
       });
       if (parsed.ok === false) {
         await this.reply(chatId, parsed.message, replyTo);
@@ -447,13 +508,17 @@ class TelegramBotService {
         source: 'bot',
       });
       log(`task ${task.id} (${kind}) cho chat ${chatId}: ${req.prompt.slice(0, 80)}`);
+      const voice = kind === 'audio' ? speechOf(task.prompt)?.voice : null;
       const what =
         kind === 'image'
           ? `${req.count > 1 ? `${req.count} ` : ''}ảnh${req.ratio ? ` ${req.ratio}` : ''}`
-          : `video${req.durationSec ? ` ${req.durationSec}s` : ''}${req.ratio ? ` ${req.ratio}` : ''}`;
-      await this.reply(chatId, `Đang tạo ${what}${images.length ? ' kèm ảnh gốc' : ''} — ${task.id}, có thể mất vài phút…`, replyTo);
+          : kind === 'audio'
+            ? `giọng nói${voice ? ` (${voice})` : ''}`
+            : `video${req.durationSec ? ` ${req.durationSec}s` : ''}${req.ratio ? ` ${req.ratio}` : ''}`;
+      const wait = kind === 'audio' ? 'thường dưới 1 phút' : 'có thể mất vài phút';
+      await this.reply(chatId, `Đang tạo ${what}${images.length ? ' kèm ảnh gốc' : ''} — ${task.id}, ${wait}…`, replyTo);
 
-      const action = kind === 'image' ? 'upload_photo' : 'upload_video';
+      const action = kind === 'image' ? 'upload_photo' : kind === 'audio' ? 'record_voice' : 'upload_video';
       const deadline = Date.now() + TASK_TIMEOUT_MS;
       let record = task;
       while (record.status === 'queued' || record.status === 'running') {
@@ -478,7 +543,13 @@ class TelegramBotService {
     }
   }
 
-  private async sendResult(chatId: number, task: { media: { url: string; kind: string }[]; threadUrl: string | null; prompt: string }, replyTo?: number) {
+  private async sendResult(
+    chatId: number,
+    task: { media: { url: string; kind: string; duration_sec?: number | null }[]; threadUrl: string | null; prompt: string },
+    replyTo?: number,
+  ) {
+    // Speech: caption with what was read, not the instructions sent to Muse.
+    const speech = speechOf(task.prompt);
     if (!task.media.length) {
       await this.reply(chatId, `Xong nhưng không có media. Thread: ${task.threadUrl ?? '(không có)'}`, replyTo);
       return;
@@ -496,7 +567,14 @@ class TelegramBotService {
           size = fs.statSync(local.file).size;
         } catch {}
         if (size > 0 && size <= MAX_UPLOAD_BYTES) {
-          const ok = await this.upload(chatId, local.file, media.kind === 'image' ? 'photo' : 'video', task.prompt.slice(0, 900), replyTo);
+          const ok =
+            media.kind === 'audio'
+              ? await this.upload(chatId, local.file, 'audio', (speech?.text ?? '').slice(0, 900), replyTo, {
+                  title: (speech?.text ?? 'Muse voice').replace(/\s+/g, ' ').slice(0, 60),
+                  performer: speech?.voice ?? 'Muse',
+                  duration: media.duration_sec ? Math.round(media.duration_sec) : undefined,
+                })
+              : await this.upload(chatId, local.file, media.kind === 'image' ? 'photo' : 'video', task.prompt.slice(0, 900), replyTo);
           if (ok) {
             markMediaServed(local.name);
             sent++;
@@ -554,14 +632,27 @@ class TelegramBotService {
     }
   }
 
-  private async upload(chatId: number, file: string, kind: 'photo' | 'video', caption: string, replyTo?: number): Promise<boolean> {
+  private async upload(
+    chatId: number,
+    file: string,
+    kind: 'photo' | 'video' | 'audio',
+    caption: string,
+    replyTo?: number,
+    audio?: { title: string; performer: string; duration?: number },
+  ): Promise<boolean> {
     try {
       const fd = new FormData();
       fd.append('chat_id', String(chatId));
       if (replyTo) fd.append('reply_to_message_id', String(replyTo));
       fd.append(kind, new Blob([fs.readFileSync(file)]), path.basename(file));
       if (caption) fd.append('caption', caption);
-      const res = await fetch(`${API_BASE}/bot${this.token}/${kind === 'photo' ? 'sendPhoto' : 'sendVideo'}`, {
+      if (audio) {
+        fd.append('title', audio.title);
+        fd.append('performer', audio.performer);
+        if (audio.duration) fd.append('duration', String(audio.duration));
+      }
+      const method = kind === 'photo' ? 'sendPhoto' : kind === 'audio' ? 'sendAudio' : 'sendVideo';
+      const res = await fetch(`${API_BASE}/bot${this.token}/${method}`, {
         method: 'POST',
         body: fd,
       });

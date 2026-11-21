@@ -12,12 +12,12 @@ Turn your own muse.ai accounts into an **OpenAI-compatible API** that runs on yo
 
 ## Features
 
-- **OpenAI-compatible:** `/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`, `/v1/models`
-- **Images and video:** up to 4 images per request, videos through a task API with polling or webhooks, reference images supported
+- **OpenAI-compatible:** `/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/models`
+- **Images, video and voice:** up to 4 images per request, videos through a task API with polling or webhooks, reference images supported, text-to-speech mp3 with Muse's 1,219 voices
 - **MCP server** for Claude, Cursor and other agents
 - **Account pool:** round-robin, failover or parallel across several Muse accounts, with automatic concurrency per account
 - **Dashboard:** accounts, API keys with per-model access, usage stats, generated media, logs
-- **Reach it from anywhere:** Cloudflare tunnel, Tailscale, or a Telegram bot
+- **Reach it from anywhere:** Cloudflare tunnel, Tailscale, or a Telegram bot (`/vid`, `/img`, `/voice`)
 - **Windows tray app:** runs in the background and starts with Windows
 
 ## Quick start
@@ -42,7 +42,7 @@ reply = client.chat.completions.create(
 print(reply.choices[0].message.content)
 ```
 
-Models: `muse-chat`, `muse-image`, `muse-video`. The full API reference (tasks, webhooks, errors) is in [npm/README.md](npm/README.md).
+Models: `muse-chat`, `muse-image`, `muse-video`, `muse-voice`. The full API reference (tasks, webhooks, errors) is in [npm/README.md](npm/README.md).
 
 | Account pool | Accounts |
 |---|---|

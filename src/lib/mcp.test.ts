@@ -41,8 +41,9 @@ function fakeBackend(opts: { finishAfter?: number; allowed?: string[]; tasks?: M
   const created: CreateTaskArgs[] = [];
   const store = new Map<string, McpTask>((opts.tasks ?? []).map((t) => [t.id, t]));
   const polls = new Map<string, number>();
-  const kinds: Record<string, 'image' | 'video' | 'chat'> = {
+  const kinds: Record<string, 'image' | 'video' | 'chat' | 'audio'> = {
     'muse-image': 'image',
+    'muse-voice': 'audio',
     'muse-video': 'video',
     'muse-chat': 'chat',
     'fast-video': 'video',
@@ -145,7 +146,7 @@ test('notifications and client responses get no reply; bad messages get errors',
 test('tools/list describes every tool with schemas and annotations', async () => {
   const res = (await handleMcpMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ctxFor(fakeBackend().backend))) as any;
   const names = res.result.tools.map((t: any) => t.name);
-  assert.deepEqual(names, ['generate_image', 'generate_video', 'get_task', 'continue_task', 'cancel_task', 'list_tasks', 'list_models']);
+  assert.deepEqual(names, ['generate_image', 'generate_video', 'generate_speech', 'get_task', 'continue_task', 'cancel_task', 'list_tasks', 'list_models']);
   for (const tool of res.result.tools) {
     assert.equal(tool.inputSchema.type, 'object');
     assert.equal(tool.outputSchema.type, 'object');
@@ -332,4 +333,23 @@ test('generate_image passes count (1–4) through; video always asks for one', a
   assert.match(tooMany.result.content[0].text, /between 1 and 4/);
   const onVideo = await call(ctx, 'generate_video', { prompt: 'x', count: 2 });
   assert.match(onVideo.result.content[0].text, /Unknown argument: count/);
+});
+
+test('generate_speech sends the text and voice settings to muse-voice', async () => {
+  const { backend, created } = fakeBackend({ finishAfter: 0 });
+  const ctx = ctxFor(backend);
+  const res = await call(ctx, 'generate_speech', { text: 'Xin chào', voice: 'Glad Kite', language: 'vi', speed: 1.2, wait_seconds: 0 });
+  assert.notEqual(res.result.isError, true);
+  assert.equal(created[0].model, 'muse-voice');
+  assert.equal(created[0].prompt, 'Xin chào');
+  assert.equal(created[0].voice, 'Glad Kite');
+  assert.equal(created[0].language, 'vi');
+  assert.equal(created[0].speed, 1.2);
+  assert.equal(created[0].newChat, true);
+  const wrongKind = await call(ctx, 'generate_speech', { text: 'x', model: 'muse-image' });
+  assert.equal(wrongKind.result.isError, true);
+  const noText = await call(ctx, 'generate_speech', {});
+  assert.equal(noText.result.isError, true);
+  const badSpeed = await call(ctx, 'generate_speech', { text: 'x', speed: 'fast' });
+  assert.match(badSpeed.result.content[0].text, /speed/);
 });

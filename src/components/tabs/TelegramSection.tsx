@@ -192,6 +192,8 @@ export function TelegramSection() {
               <div><code>/vid &lt;prompt&gt;</code> — {t('tạo video theo mặc định')}</div>
               <div><code>/vid 16:9 15s &lt;prompt&gt;</code> — {t('video tỉ lệ / thời lượng tùy chọn (dọc/ngang/vuông cũng được)')}</div>
               <div><code>/img &lt;prompt&gt;</code> / <code>/img 3 4:3 &lt;prompt&gt;</code> — {t('tạo ảnh, tối đa 4 ảnh/lần')}</div>
+              <div><code>/voice &lt;văn bản&gt;</code> / <code>/voice [nam] [1.2x] &lt;văn bản&gt;</code> — {t('đọc thành file mp3; reply một tin nhắn bằng /voice để đọc tin đó')}</div>
+              <div><code>/voice [Glad Kite] &lt;văn bản&gt;</code> · <code>/voices</code> — {t('chọn giọng theo tên, xem danh sách giọng')}</div>
               <div><code>&lt;prompt&gt;</code> — {t('prompt trần hiểu ý định: "tạo ảnh mèo" → ảnh, "quay mèo" → video')}</div>
               <div>{t('Gửi kèm 1 ảnh = ảnh tham chiếu (img2img / image-to-video)')}</div>
               <div style={{ marginTop: 6 }}>

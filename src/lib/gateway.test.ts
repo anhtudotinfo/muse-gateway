@@ -14,6 +14,8 @@ import {
 } from './mediaResult.ts';
 import { baseKind, ratioFromSize, withMediaIntent } from './modelKind.ts';
 import { buildTaskPrompt, parseTaskInput, signWebhook } from './taskInput.ts';
+import { mp3DurationSec } from './mp3.ts';
+import { MAX_SPEECH_TASK_CHARS, parseVoiceCommand, speechOf, buildSpeechPrompt, museSpeed, museVoice, parseSpeechOptions, speechTextError } from './speech.ts';
 
 test('requested length reads the number after "video"', () => {
   assert.equal(requestedVideoSeconds('Tạo video 30 giây tỷ lệ 9:16: giữ 3 giây cuối'), 30);
@@ -230,4 +232,90 @@ test('count asks Muse for several images in one message', () => {
   assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: '1:1', count: 4 }, 'image'), 'Tạo 4 ảnh khác nhau tỷ lệ khung hình 1:1: mèo');
   assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: null, count: 3 }, 'image'), 'Tạo 3 ảnh khác nhau: mèo');
   assert.equal(buildTaskPrompt({ prompt: 'mèo', durationSec: null, ratio: null }, 'image'), 'mèo');
+});
+
+test('voice model names are the audio kind', () => {
+  for (const m of ['muse-voice', 'muse-voice-vn', 'muse-tts', 'tts-1', 'tts-1-hd', 'gpt-4o-mini-tts']) assert.equal(baseKind(m), 'audio', m);
+  assert.equal(baseKind('muse-video'), 'video');
+});
+
+test('speech prompt quotes the text and names voice, language and speed', () => {
+  const vi = buildSpeechPrompt('Xin chào các bạn');
+  assert.match(vi, /voice: Glad Kite/);
+  assert.match(vi, /language: vi/);
+  assert.match(vi, /speed: 100/);
+  assert.ok(vi.endsWith('"""\nXin chào các bạn\n"""'));
+  const en = buildSpeechPrompt('Hello there', { voice: 'nova', speed: 1.5 });
+  assert.match(en, /voice: Aria/);
+  assert.doesNotMatch(en, /language:/);
+  assert.match(en, /speed: 150/);
+  assert.equal(museVoice('Glad Kite', null), 'Glad Kite');
+  assert.equal(museVoice(null, null), 'Helio');
+  // OpenAI names keep their register, in Vietnamese when the text is.
+  assert.equal(museVoice('onyx', null), 'Helio');
+  assert.equal(museVoice('onyx', 'vi'), 'Kindhearted Jetty');
+  assert.equal(museVoice('Nova', 'vi'), 'Glad Kite');
+  assert.match(buildSpeechPrompt('Chào buổi tối', { voice: 'echo' }), /voice: Kindhearted Jetty/);
+  assert.equal(museSpeed(10), 200);
+  assert.equal(museSpeed(undefined), 100);
+});
+
+test('speech options and text are validated', () => {
+  assert.equal(parseSpeechOptions({ speed: 5 }).ok, false);
+  assert.equal(parseSpeechOptions({ speed: '1' }).ok, false);
+  assert.equal(parseSpeechOptions({ language: 'Vietnamese' }).ok, false);
+  assert.deepEqual(parseSpeechOptions({ voice: ' Aria ', language: 'pt_BR', speed: 0.5 }), { ok: true, voice: 'Aria', language: 'pt_BR', speed: 0.5 });
+  assert.match(speechTextError('  ')!, /required/);
+  assert.match(speechTextError('x'.repeat(4097))!, /4,096/);
+  assert.equal(speechTextError('x'.repeat(6000), 'prompt', MAX_SPEECH_TASK_CHARS), null);
+  assert.match(speechTextError('x'.repeat(6001), 'prompt', MAX_SPEECH_TASK_CHARS)!, /`prompt` is limited to 6,000/);
+  assert.equal(speechTextError('ok'), null);
+});
+
+test('audio tasks carry voice settings into the Muse prompt', () => {
+  const parsed = parseTaskInput({ prompt: 'Chào buổi sáng', voice: 'Helio', speed: 0.8 });
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.equal(parsed.input.voice, 'Helio');
+  const prompt = buildTaskPrompt(parsed.input, 'audio');
+  assert.match(prompt, /voice: Helio/);
+  assert.match(prompt, /speed: 80/);
+  assert.equal(parseTaskInput({ prompt: 'x', speed: 9 }).ok, false);
+  // A bare sentence to a voice model becomes a read-aloud request.
+  assert.match(withMediaIntent('Xin chào', 'audio'), /text-to-speech/);
+});
+
+/** A silent MPEG-1 Layer III file: `frames` frames of 128 kbps, 44.1 kHz. */
+function fakeMp3(frames: number, id3 = true): Uint8Array {
+  const frameSize = Math.floor((144 * 128000) / 44100); // 417, no padding
+  const tag = id3 ? [0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 20, ...new Array(20).fill(0)] : [];
+  const out = new Uint8Array(tag.length + frames * frameSize);
+  out.set(tag);
+  for (let f = 0; f < frames; f++) out.set([0xff, 0xfb, 0x90, 0x00], tag.length + f * frameSize);
+  return out;
+}
+
+test('mp3 duration is counted from the frames, after any ID3 tag', () => {
+  // 1152 samples per frame at 44.1 kHz: 383 frames ≈ 10.0 s.
+  assert.equal(mp3DurationSec(fakeMp3(383)), 10);
+  assert.equal(mp3DurationSec(fakeMp3(383, false)), 10);
+  assert.equal(mp3DurationSec(new Uint8Array([1, 2, 3, 4, 5])), null);
+  assert.equal(mp3DurationSec(new TextEncoder().encode('<html>not audio</html>')), null);
+});
+
+test('speech prompt round-trips to the text and voice it reads', () => {
+  const prompt = buildSpeechPrompt('Dòng một\nDòng "hai"', { voice: 'Zealous Harbor' });
+  assert.deepEqual(speechOf(prompt), { text: 'Dòng một\nDòng "hai"', voice: 'Zealous Harbor' });
+  assert.equal(speechOf('a cat on the grass'), null);
+});
+
+test('chat /voice options sit in brackets before the text', () => {
+  assert.deepEqual(parseVoiceCommand(' Xin chào '), { ok: true, text: 'Xin chào', voice: null, speed: null });
+  assert.deepEqual(parseVoiceCommand('[nam] [1,2x] Chào buổi sáng'), { ok: true, text: 'Chào buổi sáng', voice: 'Kindhearted Jetty', speed: 1.2 });
+  assert.deepEqual(parseVoiceCommand('[nữ] Good morning'), { ok: true, text: 'Good morning', voice: 'Aria', speed: null });
+  assert.deepEqual(parseVoiceCommand('[Warm Pebble] Hi'), { ok: true, text: 'Hi', voice: 'Warm Pebble', speed: null });
+  // A sentence starting with a name or a number is just text.
+  assert.equal((parseVoiceCommand('Nam đi học 2x mỗi tuần') as any).voice, null);
+  assert.equal(parseVoiceCommand('[9x] hi').ok, false);
+  assert.deepEqual(parseVoiceCommand('[nam]'), { ok: true, text: '', voice: 'Helio', speed: null });
 });

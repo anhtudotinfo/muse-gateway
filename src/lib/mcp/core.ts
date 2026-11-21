@@ -29,7 +29,7 @@ export const JSONRPC = {
   INTERNAL_ERROR: -32603,
 } as const;
 
-export type TaskKind = 'chat' | 'image' | 'video';
+export type TaskKind = 'chat' | 'image' | 'video' | 'audio';
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface McpTask {
@@ -58,6 +58,10 @@ export interface CreateTaskArgs {
   ratio: string | null;
   /** Images in this one request (1–4); 1 for video. */
   count: number;
+  /** Speech only: Muse voice, locale and speed (0.25–4). */
+  voice?: string | null;
+  language?: string | null;
+  speed?: number | null;
   newChat: boolean;
   thread: string | null;
   account: string | null;
@@ -113,7 +117,8 @@ export type JsonRpcResponse =
 export class McpToolError extends Error {}
 
 const SERVER_INSTRUCTIONS = [
-  'Muse Gateway generates images and videos with Muse.',
+  'Muse Gateway generates images, videos and speech with Muse.',
+  'generate_speech reads text aloud with one of the Muse voices and returns an mp3 (usually within a minute).',
   'generate_image waits for the pictures (up to ~50s) and returns them; set count (up to 4) to get several different images from one request instead of calling it repeatedly. If not ready yet, poll get_task with the returned task_id.',
   'generate_video returns a task_id right away — videos take minutes. Poll get_task (use wait_seconds to block up to 55s per call).',
   'Muse renders about 10 seconds per clip reliably. For longer videos, make 10-second clips and chain them with continue_task, which keeps the same Muse conversation.',
@@ -231,6 +236,29 @@ export const TOOLS = [
     annotations: { title: 'Generate video', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
+    name: 'generate_speech',
+    title: 'Generate speech',
+    description:
+      'Read text aloud with the Muse voice tool and return an mp3. Muse has 1,219 voices — pass a voice name such as "Glad Kite" (the Vietnamese one), "Helio" or "Aria"; unset picks Glad Kite for Vietnamese text and Helio otherwise. Waits for the file (default 50s); if Muse is slower, returns a task_id to poll with get_task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', minLength: 1, maxLength: 6000, description: 'Exactly what to read aloud, up to 6,000 characters (about 5 minutes of speech).' },
+        voice: { type: 'string', maxLength: 80, description: 'Muse voice name, e.g. "Glad Kite", "Helio", "Aria".' },
+        language: { type: 'string', description: 'Locale such as "vi" or "en". Default: detected from the text.' },
+        speed: { type: 'number', minimum: 0.25, maximum: 4, default: 1, description: 'Reading speed, 1 = normal.' },
+        model: { type: 'string', description: 'muse-voice (default) or a voice combo name from list_models.' },
+        wait_seconds: waitSeconds(50),
+        include_file: includeFile,
+        idempotency_key: idempotencyKey,
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    outputSchema: taskOutputSchema,
+    annotations: { title: 'Generate speech', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
     name: 'get_task',
     title: 'Get task',
     description: 'Status and result of a task. Use wait_seconds to block until it finishes (up to 55s per call). Images come back inline; videos as a link (resource_link) — set include_file to embed the video itself.',
@@ -305,7 +333,7 @@ export const TOOLS = [
   {
     name: 'list_models',
     title: 'List models',
-    description: 'Image and video models (including combos) this API key may use, for the model argument of generate_image / generate_video.',
+    description: 'Image, video and voice models (including combos) this API key may use, for the model argument of generate_image / generate_video / generate_speech.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     outputSchema: {
       type: 'object',
@@ -407,7 +435,7 @@ function summary(task: McpTask) {
 }
 
 function describe(task: McpTask): string {
-  const what = task.kind === 'video' ? 'Video' : task.kind === 'image' ? 'Image' : 'Task';
+  const what = task.kind === 'video' ? 'Video' : task.kind === 'image' ? 'Image' : task.kind === 'audio' ? 'Speech' : 'Task';
   switch (task.status) {
     case 'succeeded': {
       const lines = [`${what} ready (task ${task.id}).`];
@@ -459,7 +487,12 @@ async function toolResult(ctx: McpContext, task: McpTask, includeFile = false) {
           uri: m.url,
           name: info?.name ?? m.url.split('/').pop() ?? 'result',
           ...(info ? { mimeType: info.mimeType, size: info.size } : {}),
-          description: task.kind === 'video' ? `Generated video (task ${task.id})` : `Generated file (task ${task.id})`,
+          description:
+            task.kind === 'video'
+              ? `Generated video (task ${task.id})`
+              : task.kind === 'audio'
+                ? `Generated speech (task ${task.id})`
+                : `Generated file (task ${task.id})`,
         });
       }
     }
@@ -527,6 +560,32 @@ async function callTool(ctx: McpContext, name: string, args: any, progressToken?
         idempotencyKey: str(args, 'idempotency_key', { max: 200 }),
       });
       const wait = int(args, 'wait_seconds', 0, MAX_WAIT_SECONDS, video ? 0 : 50)!;
+      return toolResult(ctx, (wait ? await waitFor(ctx, task.id, wait, progressToken) : null) ?? task, bool(args, 'include_file'));
+    }
+    case 'generate_speech': {
+      rejectUnknown(args, ['text', 'voice', 'language', 'speed', 'model', 'wait_seconds', 'include_file', 'idempotency_key']);
+      const model = str(args, 'model', { max: 100 }) ?? 'muse-voice';
+      checkModel(backend, model, 'audio');
+      const speed = args?.speed;
+      if (speed !== undefined && speed !== null && (typeof speed !== 'number' || !Number.isFinite(speed))) {
+        throw new McpToolError('`speed` must be a number from 0.25 to 4.');
+      }
+      const task = await backend.createTask({
+        model,
+        prompt: str(args, 'text', { required: true, max: 6000 })!,
+        images: [],
+        durationSec: null,
+        ratio: null,
+        count: 1,
+        voice: str(args, 'voice', { max: 80 }),
+        language: str(args, 'language', { max: 10 }),
+        speed: speed ?? null,
+        newChat: true,
+        thread: null,
+        account: null,
+        idempotencyKey: str(args, 'idempotency_key', { max: 200 }),
+      });
+      const wait = int(args, 'wait_seconds', 0, MAX_WAIT_SECONDS, 50)!;
       return toolResult(ctx, (wait ? await waitFor(ctx, task.id, wait, progressToken) : null) ?? task, bool(args, 'include_file'));
     }
     case 'get_task': {

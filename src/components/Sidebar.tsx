@@ -30,7 +30,7 @@ const ICONS: Record<TabKey, React.ReactNode> = {
 
 const NAV: { key: TabKey; label: string; href: string }[] = [
   { key: 'overview', label: 'Overview', href: '/' },
-  { key: 'media', label: 'Images & videos', href: '/media' },
+  { key: 'media', label: 'Media', href: '/media' },
   { key: 'accounts', label: 'Accounts', href: '/accounts' },
   { key: 'connect', label: 'Connect', href: '/connect' },
   { key: 'activity', label: 'Activity', href: '/activity' },

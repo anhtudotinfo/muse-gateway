@@ -21,6 +21,7 @@ const KINDS: { key: ModelKind; label: string; desc: string }[] = [
   { key: 'chat', label: 'Chat', desc: 'Trả lời bằng chữ, như muse-chat.' },
   { key: 'image', label: 'Ảnh', desc: 'Luôn trả về ảnh, như muse-image.' },
   { key: 'video', label: 'Video', desc: 'Luôn trả về video và chờ đủ độ dài, như muse-video.' },
+  { key: 'audio', label: 'Giọng nói', desc: 'Đọc văn bản thành file mp3, như muse-voice.' },
 ];
 const kindLabel = (k: ModelKind | undefined) => KINDS.find((x) => x.key === k)?.label || 'Chat';
 

@@ -7,6 +7,7 @@ import { settingsService } from './settings';
 import { parseCommandRequests, isCommandAllowed, runLocalCommand } from './toolBridge';
 import './logBuffer';
 import { MEDIA_DIR, persistMediaFile } from './mediaStore';
+import { mp3DurationSec } from './mp3';
 import { dataPath } from './dataDir';
 import type { OpenAIModel, Profile } from '@/types';
 import { baseKind, type ModelKind } from './modelKind';
@@ -1287,6 +1288,20 @@ class MuseDriverService {
                   el.getAttribute('data-hatch-image-src'),
                   el.getAttribute('data-hatch-audio-src'),
                 ].filter(Boolean)
+              ).concat(
+                // Voice cards carry no URL in the DOM — their presentation id
+                // (read from React props) stands in for one.
+                Array.from(document.querySelectorAll('[data-testid="hatch-chat-attachment-presentation-audio"]')).flatMap(
+                  (card) => {
+                    const key = Object.keys(card).find((k) => k.startsWith('__reactFiber'));
+                    let fiber = key ? (card as any)[key] : null;
+                    for (let i = 0; fiber && i < 12; i++, fiber = fiber.return) {
+                      const id = fiber.memoizedProps?.presentation?.presentationId;
+                      if (id) return [`muse-audio:${id}`];
+                    }
+                    return [];
+                  }
+                )
               )
             );
       }, alreadyPosted);
@@ -1673,6 +1688,28 @@ class MuseDriverService {
               }
             }
           }
+          // Voice replies are an audio card with a play button and no media
+          // element: the file's name, type and size live in the card's React
+          // props, and the bytes only reach the page (as a blob:) once Play
+          // is pressed. Record the card by its presentation id; the driver
+          // plays it and saves the blob after the reply settles.
+          for (const card of Array.from(document.querySelectorAll('[data-testid="hatch-chat-attachment-presentation-audio"]'))) {
+            if (!inReplyRegion(card)) continue;
+            const key = Object.keys(card).find((k) => k.startsWith('__reactFiber'));
+            let fiber = key ? (card as any)[key] : null;
+            let presentation: any = null;
+            for (let i = 0; fiber && i < 12 && !presentation; i++, fiber = fiber.return) {
+              if (fiber.memoizedProps?.presentation?.kind === 'audio') presentation = fiber.memoizedProps.presentation;
+            }
+            const audio = presentation?.data?.audio;
+            if (!presentation?.presentationId || !audio) continue;
+            if (audio.missing) { busy = true; continue; }
+            const src = `muse-audio:${presentation.presentationId}`;
+            if (preMedia?.has(src) || media.some((m) => m.src === src)) continue;
+            const file = String(audio.path || '').split('/').pop() || 'voice.mp3';
+            media.push({ src, name: file, kind: 'audio' });
+          }
+
           // Spinners / progress bars inside the reply region also mean the
           // generation is still running even when no status text matched.
           // An image card still showing its skeleton is counted apart: Muse
@@ -1827,10 +1864,13 @@ class MuseDriverService {
       const mediaInfo: MediaInfo[] = [];
       for (const m of selectFinalMedia(lastMedia, requestedSec)) {
         let url: string | null = m.src;
+        let durationSec = m.durationSec ?? null;
         if (!/^https?:/i.test(m.src)) {
           if (signal?.aborted) break;
           try {
-            url = await this.saveBlobMedia(page, m);
+            const saved = await this.saveBlobMedia(page, m);
+            url = saved?.url ?? null;
+            durationSec = durationSec ?? saved?.durationSec ?? null;
           } catch (e: any) {
             url = null;
             console.warn('[MuseDriver] media save failed:', e?.message);
@@ -1841,7 +1881,7 @@ class MuseDriverService {
         mediaInfo.push({
           url,
           kind: mediaKindOf(m.name || m.src, m.kind),
-          duration_sec: m.durationSec ?? null,
+          duration_sec: durationSec,
         });
       }
       const partial = isShortVideo(longestVideoSeconds(lastMedia), requestedSec);
@@ -1858,7 +1898,12 @@ class MuseDriverService {
 
   // Fetch a page-local blob: URL, persist it under data/media/, return the
   // public /api/media/<file> path (callers turn it absolute per-request).
-  private async saveBlobMedia(page: Page, m: MediaItem): Promise<string | null> {
+  private async saveBlobMedia(page: Page, m: MediaItem): Promise<{ url: string; durationSec: number | null } | null> {
+    if (m.src.startsWith('muse-audio:')) {
+      const blob = await this.playVoiceCard(page, m.src.slice('muse-audio:'.length));
+      if (!blob) return null;
+      m = { ...m, src: blob };
+    }
     // A blob fetch can hang inside a busy page (seen with parallel renders on
     // one account) until puppeteer's 3-minute protocol timeout — bound it and
     // try once more before giving the picture up.
@@ -1907,9 +1952,47 @@ class MuseDriverService {
       .toString(36)
       .slice(2, 6)}${ext}`;
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
-    const url = persistMediaFile(fname, Buffer.from(data.b64, 'base64'));
+    const bytes = Buffer.from(data.b64, 'base64');
+    const url = persistMediaFile(fname, bytes);
     console.log('[MuseDriver] saved media:', fname, `(${(data.b64.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
-    return url;
+    // Videos get their length from the page; audio is measured from the file.
+    return { url, durationSec: ext === '.mp3' ? mp3DurationSec(bytes) : null };
+  }
+
+  // A voice card only loads its mp3 when played: press its Play button, wait
+  // for the <audio> element Muse mounts with a blob: source, and stop it at
+  // once. Returns that blob: URL (fetchable inside this page).
+  private async playVoiceCard(page: Page, presentationId: string): Promise<string | null> {
+    return page
+      .evaluate(async (id: string) => {
+        const cards = Array.from(document.querySelectorAll('[data-testid="hatch-chat-attachment-presentation-audio"]'));
+        const card = cards.find((el) => {
+          const key = Object.keys(el).find((k) => k.startsWith('__reactFiber'));
+          let fiber = key ? (el as any)[key] : null;
+          for (let i = 0; fiber && i < 12; i++, fiber = fiber.return) {
+            if (fiber.memoizedProps?.presentation?.presentationId === id) return true;
+          }
+          return false;
+        });
+        const play = card?.querySelector('button[aria-label="Play"], button[aria-label="Phát"]') as HTMLButtonElement | null;
+        if (!play) return null;
+        const before = new Set(Array.from(document.querySelectorAll('audio')).map((a) => a.currentSrc || a.src));
+        play.click();
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 250));
+          const audio = Array.from(document.querySelectorAll('audio')).find((a) => {
+            const s = a.currentSrc || a.src;
+            return s.startsWith('blob:') && !before.has(s);
+          });
+          if (audio) {
+            audio.muted = true;
+            audio.pause();
+            return audio.currentSrc || audio.src;
+          }
+        }
+        return null;
+      }, presentationId)
+      .catch(() => null);
   }
 
   async close(): Promise<void> {
@@ -1933,6 +2016,7 @@ export const SUPPORTED_MODELS: OpenAIModel[] = [
   { id: 'muse-chat', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'muse-video', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'muse-image', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
+  { id: 'muse-voice', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'gpt-4o-mini', object: 'model', created: 1700000000, owned_by: 'meta-muse' },
   { id: 'claude-3-5-sonnet', object: 'model', created: 1700000000, owned_by: 'meta-muse' },

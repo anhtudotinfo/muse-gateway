@@ -135,7 +135,7 @@ export function UsageTab() {
         value: fmtCompact(totals.inputTokens + totals.outputTokens),
         sub: t("{in} vào · {out} ra", { in: fmtCompact(totals.inputTokens), out: fmtCompact(totals.outputTokens) }),
       },
-      { label: t("File đã tạo"), value: fmt(data.mediaFiles || 0), sub: t("ảnh & video đã lưu") },
+      { label: t("File đã tạo"), value: fmt(data.mediaFiles || 0), sub: t("ảnh, video, giọng nói đã lưu") },
     ];
   }, [data, t]);
 

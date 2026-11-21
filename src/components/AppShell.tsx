@@ -45,7 +45,7 @@ export function useApp(): AppContextValue {
 
 const PAGE_META: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Overview', subtitle: 'Tình trạng gateway, kết quả mới và hoạt động gần đây' },
-  '/media': { title: 'Images & videos', subtitle: 'Ảnh và video tạo qua gateway' },
+  '/media': { title: 'Media', subtitle: 'Ảnh, video và giọng nói tạo qua gateway' },
   '/accounts': { title: 'Accounts', subtitle: 'Phiên đăng nhập Muse, hạn mức và cách pool chia request' },
   '/connect': { title: 'Connect', subtitle: 'Endpoint, API key và cấu hình cho tool của bạn' },
   '/activity': { title: 'Activity', subtitle: 'Thống kê request và log realtime từ driver & pool' },

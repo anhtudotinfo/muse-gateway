@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { taskService } from '@/lib/tasks';
 
-// Dashboard feed for the Images & videos page. The remote-access proxy keeps
+// Dashboard feed for the Media page. The remote-access proxy keeps
 // /api/* local, so this can show (and clean up) every key's tasks.
 export async function GET(req: NextRequest) {
   const requested = Number(req.nextUrl.searchParams.get('limit'));

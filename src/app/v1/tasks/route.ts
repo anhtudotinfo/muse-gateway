@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apiKeyService } from '@/lib/apiKeys';
 import { authorizeRequest } from '@/lib/apiGuard';
 import { assertDialableUrl, ImageRefError, loadImageRefs } from '@/lib/imageRefs';
+import { musePool } from '@/lib/musePool';
 import { publicOrigin } from '@/lib/requestOrigin';
+import { MAX_SPEECH_TASK_CHARS, speechTextError } from '@/lib/speech';
 import { parseTaskInput } from '@/lib/taskInput';
 import { taskService, taskView } from '@/lib/tasks';
 
@@ -30,6 +32,10 @@ export async function POST(req: NextRequest) {
   const parsed = parseTaskInput(body);
   if (parsed.ok === false) return invalid(parsed.message);
   const { input } = parsed;
+  if (musePool.kindOf(input.model) === 'audio') {
+    const tooLong = speechTextError(input.prompt, 'prompt', MAX_SPEECH_TASK_CHARS);
+    if (tooLong) return invalid(tooLong);
+  }
 
   if (!apiKeyService.allowsModel(caller.apiKey, input.model)) {
     return NextResponse.json(

@@ -59,6 +59,10 @@ interface TaskRecord {
     durationSec: number | null;
     /** Images asked for in the one request (absent = 1). */
     count?: number;
+    /** Voice settings for speech tasks (absent = defaults). */
+    voice?: string | null;
+    language?: string | null;
+    speed?: number | null;
     /** Reference files sent. They aren't kept, so such a task can't be
      *  rerun from the dashboard. */
     imageCount: number;
@@ -341,6 +345,9 @@ class TaskService {
         ratio: input.ratio,
         durationSec: input.durationSec,
         count: input.count,
+        voice: input.voice,
+        language: input.language,
+        speed: input.speed,
         imageCount: images.length,
       },
     };
@@ -366,7 +373,7 @@ class TaskService {
   retry(task: TaskRecord, context: { origin: string; ua: string | null }): TaskRecord {
     const blocker = this.retryBlocker(task);
     if (blocker || !task.request) throw new Error(blocker ?? 'Cannot retry this task.');
-    const { model, prompt, ratio, durationSec, count = 1 } = task.request;
+    const { model, prompt, ratio, durationSec, count = 1, voice = null, language = null, speed = null } = task.request;
     return this.create(
       {
         model,
@@ -375,6 +382,9 @@ class TaskService {
         durationSec,
         ratio,
         count,
+        voice,
+        language,
+        speed,
         newChat: true,
         thread: null,
         account: null,

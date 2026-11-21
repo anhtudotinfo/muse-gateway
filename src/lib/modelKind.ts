@@ -1,11 +1,14 @@
 // What a request is for. The model name is the contract: muse-chat answers in
-// text, muse-image returns images, muse-video returns a video. A combo carries
+// text, muse-image returns images, muse-video returns a video, muse-voice
+// reads text aloud and returns an mp3. A combo carries
 // its own kind, so its name can be anything. Nothing here reads the prompt to
 // guess — the kind is decided by the model alone.
 
-export type ModelKind = 'chat' | 'image' | 'video';
+import { buildSpeechPrompt } from './speech';
 
-export const MODEL_KINDS: readonly ModelKind[] = ['chat', 'image', 'video'];
+export type ModelKind = 'chat' | 'image' | 'video' | 'audio';
+
+export const MODEL_KINDS: readonly ModelKind[] = ['chat', 'image', 'video', 'audio'];
 
 export function isModelKind(value: unknown): value is ModelKind {
   return typeof value === 'string' && (MODEL_KINDS as readonly string[]).includes(value);
@@ -17,6 +20,9 @@ export function baseKind(model: string | null | undefined): ModelKind {
   const m = String(model || '').toLowerCase();
   if (m.startsWith('muse-video')) return 'video';
   if (m.startsWith('muse-image')) return 'image';
+  if (m.startsWith('muse-voice') || m.startsWith('muse-tts') || m === 'tts-1' || m === 'tts-1-hd' || m.startsWith('gpt-4o-mini-tts')) {
+    return 'audio';
+  }
   return 'chat';
 }
 
@@ -25,6 +31,7 @@ export function baseKind(model: string | null | undefined): ModelKind {
 const word = (alts: string) => new RegExp(`(^|[^\\p{L}])(${alts})(?=$|[^\\p{L}])`, 'iu');
 const IMAGE_WORDS = word('ảnh|hình|hình ảnh|image|images|photo|picture|poster|illustration|artwork|logo|thumbnail|banner|sticker|wallpaper');
 const VIDEO_WORDS = word('video|clip|phim|animation|footage|reel|reels');
+const VOICE_WORDS = word('giọng|giọng nói|giọng đọc|đọc|voice|speech|tts|text-to-speech|narrate|narration|audio|mp3');
 
 /** Make sure an image/video request asks Muse for that output — a bare
  *  "a cat on the grass" sent as muse-image would otherwise come back as a
@@ -32,6 +39,9 @@ const VIDEO_WORDS = word('video|clip|phim|animation|footage|reel|reels');
 export function withMediaIntent(prompt: string, kind: ModelKind): string {
   if (kind === 'image' && !IMAGE_WORDS.test(prompt)) return `Tạo ảnh: ${prompt}`;
   if (kind === 'video' && !VIDEO_WORDS.test(prompt)) return `Tạo video: ${prompt}`;
+  // A chat message sent to muse-voice is the text to read, unless it already
+  // asks for a voice in its own words ("đọc bằng giọng Hubert: …").
+  if (kind === 'audio' && !VOICE_WORDS.test(prompt)) return buildSpeechPrompt(prompt);
   return prompt;
 }
 

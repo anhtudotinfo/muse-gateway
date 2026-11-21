@@ -5,6 +5,7 @@ import { type BadgeVariant } from '@/components/endpoint/ui/Badge';
 import { HeaderSlot } from '@/components/HeaderSlot';
 import { useApp } from '@/components/AppShell';
 import { useT } from '@/lib/i18n';
+import { speechOf } from '@/lib/speech';
 
 export interface DashboardTask {
   id: string;
@@ -12,7 +13,7 @@ export interface DashboardTask {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   model: string;
   /** What the model promised (combos included); absent from older gateways. */
-  kind?: 'chat' | 'image' | 'video';
+  kind?: 'chat' | 'image' | 'video' | 'audio';
   prompt: string;
   key_name: string;
   created_at: number;
@@ -68,10 +69,10 @@ const FILTER_LABEL: Record<Filter, string> = {
   cancelled: 'Cancelled',
 };
 
-const KINDS = ['all', 'image', 'video'] as const;
+const KINDS = ['all', 'image', 'video', 'audio'] as const;
 type Kind = (typeof KINDS)[number];
 
-const KIND_LABEL: Record<Kind, string> = { all: 'Tất cả loại', image: 'Ảnh', video: 'Video' };
+const KIND_LABEL: Record<Kind, string> = { all: 'Tất cả loại', image: 'Ảnh', video: 'Video', audio: 'Giọng nói' };
 
 function formatTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString([], {
@@ -87,10 +88,74 @@ function formatLength(task: DashboardTask): string {
   return task.requested_duration_sec ? `${actual} / ${task.requested_duration_sec}s` : actual;
 }
 
+export function isAudio(task: Pick<DashboardTask, 'url' | 'model' | 'kind'>): boolean {
+  if (task.url && /\.(mp3|wav|m4a|ogg)(\?|$)/i.test(task.url)) return true;
+  return task.kind === 'audio';
+}
+
 export function isVideo(task: Pick<DashboardTask, 'url' | 'model' | 'kind'>): boolean {
+  if (isAudio(task)) return false;
   if (task.url && /\.(mp4|webm|mov|m4v)(\?|$)/i.test(task.url)) return true;
   if (task.url && /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(task.url)) return false;
   return task.kind ? task.kind === 'video' : /video/i.test(task.model);
+}
+
+/** The prompt as the user wrote it: the text read aloud for speech tasks. */
+export function displayPrompt(task: Pick<DashboardTask, 'prompt' | 'url' | 'model' | 'kind'>): string {
+  return (isAudio(task) && speechOf(task.prompt)?.text) || task.prompt;
+}
+
+/** Bar heights (0–1) for a task's waveform: fixed per task, so each card
+ *  looks different but never changes between renders. */
+function waveHeights(seed: string, bars: number): number[] {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return Array.from({ length: bars }, (_, i) => {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    const r = ((h >>> 0) % 1000) / 1000;
+    const envelope = Math.sin((Math.PI * (i + 0.5)) / bars);
+    return 0.16 + 0.84 * r * (0.4 + 0.6 * envelope);
+  });
+}
+
+/** Cover for a speech file: waveform and voice name. Decorative; the
+ *  player in the detail panel is what plays it. */
+export function AudioArt({ task, playing = false, className = '' }: { task: DashboardTask; playing?: boolean; className?: string }) {
+  const voice = speechOf(task.prompt)?.voice;
+  return (
+    <span className={`aud-art${playing ? ' playing' : ''} ${className}`}>
+      <span className="aud-icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8" />
+        </svg>
+      </span>
+      <span className="aud-wave" aria-hidden="true">
+        {waveHeights(task.id, 28).map((height, i) => (
+          <i key={i} style={{ height: `${Math.round(height * 100)}%`, animationDelay: `${(i % 7) * 90}ms` }} />
+        ))}
+      </span>
+      {voice && <span className="aud-voice">{voice}</span>}
+    </span>
+  );
+}
+
+function AudioPlayer({ task }: { task: DashboardTask }) {
+  const [playing, setPlaying] = useState(false);
+  return (
+    <div className="aud-player">
+      <AudioArt task={task} playing={playing} />
+      <audio
+        src={localMediaUrl(task.url!)}
+        className="aud-controls"
+        controls
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+    </div>
+  );
 }
 
 /** Files the gateway stores itself are served from /api/media on every
@@ -118,6 +183,9 @@ export function MediaPreview({
   controls?: boolean;
 }) {
   if (!task.url) return null;
+  if (isAudio(task)) {
+    return controls ? <AudioPlayer task={task} /> : <AudioArt task={task} className={className} />;
+  }
   if (!isVideo(task)) {
     return <img src={localMediaUrl(task.url)} alt={task.prompt} className={className} loading="lazy" />;
   }
@@ -144,6 +212,7 @@ function matches(task: DashboardTask, filter: Filter): boolean {
 
 function matchesKind(task: DashboardTask, kind: Kind): boolean {
   if (kind === 'all') return true;
+  if (kind === 'audio' || isAudio(task)) return isAudio(task) === (kind === 'audio');
   return isVideo(task) === (kind === 'video');
 }
 
@@ -373,6 +442,7 @@ export function MediaTab() {
   const tileTag = (task: DashboardTask) => {
     if (task.status === 'running' || task.status === 'queued') return '…';
     if (isVideo(task)) return task.duration_sec ? `${Math.round(task.duration_sec)}s` : null;
+    if (isAudio(task)) return task.duration_sec ? `${Math.round(task.duration_sec)}s` : task.url ? t('Giọng nói') : null;
     return task.url ? t('Ảnh') : null;
   };
 
@@ -383,7 +453,7 @@ export function MediaTab() {
         ? t('Failed')
         : task.status === 'cancelled'
           ? t('Cancelled')
-          : isVideo(task) ? t('Video') : t('Ảnh');
+          : isAudio(task) ? t('Giọng nói') : isVideo(task) ? t('Video') : t('Ảnh');
 
   const copyLink = (task: DashboardTask) => {
     if (!task.url) return;
@@ -531,7 +601,7 @@ export function MediaTab() {
       ) : visible.length === 0 ? (
         <div className="acc2-card acc2-empty">
           <div className="acc2-empty-title">
-            {tasks.length === 0 ? t('Chưa có ảnh hay video nào') : t('Không có mục nào khớp bộ lọc')}
+            {tasks.length === 0 ? t('Chưa có ảnh, video hay giọng nói nào') : t('Không có mục nào khớp bộ lọc')}
           </div>
           {tasks.length === 0 && (
             <p>{t('Tạo ảnh hoặc video từ tool đã kết nối, hoặc gọi POST /v1/tasks. Trang Kết nối có sẵn ví dụ chạy được.')}</p>
@@ -566,7 +636,7 @@ export function MediaTab() {
                     <span className={`med-badge ${status.tone}`}>{status.label}</span>
                     {tag && <span className="med-tag">{tag}</span>}
                   </span>
-                  <span className="med-tile-title" title={task.prompt}>{task.prompt || '—'}</span>
+                  <span className="med-tile-title" title={displayPrompt(task)}>{displayPrompt(task) || '—'}</span>
                 </button>
               );
             })}
@@ -574,7 +644,7 @@ export function MediaTab() {
 
           {selected && (
             <aside className="med-detail" aria-label={t('Chi tiết')}>
-              <div className="med-detail-preview">
+              <div className={`med-detail-preview${isAudio(selected) && selected.url ? ' audio' : ''}`}>
                 {selected.url ? (
                   <MediaPreview key={selected.id} task={selected} className="med-detail-media" controls />
                 ) : (
@@ -589,13 +659,19 @@ export function MediaTab() {
                   </span>
                   <span className="acc2-muted" title={formatTime(selected.created_at)}>{ago(selected.created_at)}</span>
                 </div>
-                <p className="med-detail-prompt">{selected.prompt || '—'}</p>
+                <p className="med-detail-prompt">{displayPrompt(selected) || '—'}</p>
                 {selected.error && <p className="med-detail-error">{selected.error}</p>}
                 <dl className="med-detail-meta">
                   <dt>{t('Model')}</dt>
                   <dd className="mono">{selected.model}</dd>
                   <dt>{t('Nguồn')}</dt>
                   <dd>{sourceOf(selected)}</dd>
+                  {isAudio(selected) && speechOf(selected.prompt)?.voice && (
+                    <>
+                      <dt>{t('Giọng')}</dt>
+                      <dd>{speechOf(selected.prompt)!.voice}</dd>
+                    </>
+                  )}
                   <dt>{t('Length')}</dt>
                   <dd>{formatLength(selected)}</dd>
                   {selected.webhook_status && (
@@ -689,7 +765,7 @@ export function MediaTab() {
                     <td className="acc2-muted num">{formatTime(task.created_at)}</td>
                     <td className="med-table-task">
                       <div className="med-table-origin">{origin(task)}</div>
-                      <div className="med-table-prompt" title={task.prompt}>{task.prompt}</div>
+                      <div className="med-table-prompt" title={displayPrompt(task)}>{displayPrompt(task)}</div>
                       {task.error && <div className="med-table-error" title={task.error}>{task.error}</div>}
                     </td>
                     <td>

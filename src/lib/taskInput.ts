@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { ModelKind } from './modelKind';
+import { buildSpeechPrompt, parseSpeechOptions } from './speech';
 
 // Request contract of POST /v1/tasks. Kept free of the Muse pool so it can
 // be exercised without a browser.
@@ -21,6 +22,10 @@ export interface TaskInput {
   ratio: string | null;
   /** Images to make in this one request (1–4). Image models only. */
   count: number;
+  /** Voice models only: Muse voice name, locale and OpenAI-style speed. */
+  voice: string | null;
+  language: string | null;
+  speed: number | null;
   newChat: boolean;
   thread: string | null;
   account: string | null;
@@ -63,6 +68,10 @@ export function parseTaskInput(body: any): TaskInputResult {
   if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > MAX_IMAGES_PER_REQUEST) {
     return { ok: false, message: `\`count\` must be a whole number from 1 to ${MAX_IMAGES_PER_REQUEST}.` };
   }
+  // Voice settings are checked for every model and used only by voice models;
+  // their shorter text limit applies once the model's kind is known.
+  const voiceFields = parseSpeechOptions(body);
+  if (voiceFields.ok === false) return { ok: false, message: voiceFields.message };
   return {
     ok: true,
     input: {
@@ -72,6 +81,9 @@ export function parseTaskInput(body: any): TaskInputResult {
       durationSec: duration === null ? null : Math.round(duration),
       ratio,
       count,
+      voice: voiceFields.voice,
+      language: voiceFields.language,
+      speed: voiceFields.speed,
       newChat: body.new_chat !== false,
       thread: optionalString(body.thread),
       account: optionalString(body.account),
@@ -84,9 +96,19 @@ export function parseTaskInput(body: any): TaskInputResult {
 
 /** Muse has no API fields for length or shape — they travel in the text. */
 export function buildTaskPrompt(
-  { prompt, durationSec, ratio, count = 1 }: Pick<TaskInput, 'prompt' | 'durationSec' | 'ratio'> & { count?: number },
+  {
+    prompt,
+    durationSec,
+    ratio,
+    count = 1,
+    voice = null,
+    language = null,
+    speed = null,
+  }: Pick<TaskInput, 'prompt' | 'durationSec' | 'ratio'> & Partial<Pick<TaskInput, 'count' | 'voice' | 'language' | 'speed'>>,
   kind: ModelKind,
 ): string {
+  // For a voice model the prompt is the text to read aloud.
+  if (kind === 'audio') return buildSpeechPrompt(prompt, { voice, language, speed });
   const shape = ratio ? ` tỷ lệ khung hình ${ratio}` : '';
   if (kind === 'image') {
     // Several images ride one message — Muse returns them together, so N
