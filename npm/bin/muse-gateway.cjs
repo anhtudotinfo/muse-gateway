@@ -210,16 +210,20 @@ function pidsByPort() {
 }
 
 function killPid(pid) {
+  // Windows: kill the whole tree. The server's children (tray, cloudflared,
+  // Muse browsers) start with the app dir as their working directory, and
+  // any of them left running keeps that folder locked — `npm i -g` then
+  // fails with EBUSY on the next update.
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe' });
+      return true;
+    } catch {}
+  }
   try {
     process.kill(pid);
     return true;
   } catch {
-    if (process.platform === 'win32') {
-      try {
-        execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe' });
-        return true;
-      } catch {}
-    }
     return false;
   }
 }
@@ -575,23 +579,38 @@ async function interactiveMenu() {
       }
 
       case 'update': {
+        // Stop the running server first: on Windows it (and the browsers,
+        // tray and tunnel it started) runs from inside the package's app
+        // folder, so npm can't replace that folder while it is up (EBUSY).
+        const wasRunning = !!(await getStatus());
+        if (wasRunning) {
+          process.stdout.write('\nStopping the server for the update…\n');
+          stopInstance();
+          for (let i = 0; i < 20 && pidsByPort().length; i++) await new Promise((r) => setTimeout(r, 250));
+          await new Promise((r) => setTimeout(r, 1500)); // let Windows release file handles
+        }
         process.stdout.write(`\nInstalling muse-gateway v${latest}…\n`);
-        try {
+        const install = () => new Promise((resolve) => {
           const upd = spawn('npm', ['i', '-g', 'muse-gateway'], { stdio: 'inherit', shell: true });
-          upd.on('error', () => {
-            console.log('Update failed — run manually: npm i -g muse-gateway');
+          upd.on('error', () => resolve(1));
+          upd.on('exit', (code) => resolve(code ?? 1));
+        });
+        try {
+          let code = await install();
+          if (code) {
+            // A handle that outlived the kill (antivirus, a browser shutting
+            // down) is the usual cause; one retry after a pause clears it.
+            process.stdout.write('\nRetrying in 5s…\n');
+            await new Promise((r) => setTimeout(r, 5000));
+            code = await install();
+          }
+          if (code) {
+            console.log('\nUpdate failed — close every Muse Gateway window, then run: npm i -g muse-gateway');
+            if (wasRunning) spawnBackground(); // put the old version back up
             process.exit(0);
-          });
-          upd.on('exit', async (code) => {
-            if (code) {
-              console.log('\nUpdate failed — run manually: npm i -g muse-gateway');
-              process.exit(0);
-            }
-            // The old server process still holds the port — files changed on
-            // disk but RAM keeps the old build. Kill it and respawn so the
-            // new code is actually the one answering :1412.
-            console.log('\nRestarting server with the new version…');
-            if (await getStatus()) stopInstance();
+          }
+          {
+            console.log('\nStarting the new version…');
             spawnBackground();
             const ok = await waitReady(45000);
             const st = ok ? await getStatus() : null;
@@ -603,8 +622,7 @@ async function interactiveMenu() {
                   : C.yellow('Installed — start manually: muse-gateway')
             );
             process.exit(0);
-          });
-          return; // npm takes over the terminal
+          }
         } catch {
           console.log('Update failed — run manually: npm i -g muse-gateway');
         }
