@@ -412,5 +412,6 @@
   font-size: 0.8rem; font-weight: 700; color: #fff;
   background: rgba(0, 0, 0, 0.45); border: 1.5px solid rgba(255, 255, 255, 0.85);
 }
-.med-check.on { background: var(--apple-red); border-color: var(--apple-red); }
-.med-tile.picked .med-thumb { outline: 2px solid var(--apple-red); outline-offset: -2px; }
+/* Selection is a brand affordance, not an error — use the accent, not red. */
+.med-check.on { background: var(--apple-blue); border-color: var(--apple-blue); }
+.med-tile.picked .med-thumb { outline: 2px solid var(--apple-blue); outline-offset: -2px; }

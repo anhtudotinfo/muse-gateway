@@ -25,9 +25,12 @@
   --apple-green-dim: rgba(52, 211, 153, 0.14);
   --apple-green-border: rgba(52, 211, 153, 0.35);
 
-  --apple-red: #f43f5e;
-  --apple-red-dim: rgba(244, 63, 94, 0.14);
-  --apple-red-border: rgba(244, 63, 94, 0.35);
+  /* Error/danger red — kept DISTINCT from the rose brand accent (#f43f5e) so
+     destructive actions and error states don't read as primary CTAs. Matches
+     the #f87171 danger red already hardcoded in activity.css / license. */
+  --apple-red: #f87171;
+  --apple-red-dim: rgba(248, 113, 113, 0.14);
+  --apple-red-border: rgba(248, 113, 113, 0.38);
 
   --apple-purple: #fb7185;
   --apple-purple-dim: rgba(244, 63, 94, 0.14);
