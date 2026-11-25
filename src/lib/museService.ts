@@ -38,6 +38,29 @@ export interface BrowserExecutableInfo {
 
 // Find Chrome/Edge executables on Windows
 export function getBrowserExecutable(preferred: string = 'chrome'): BrowserExecutableInfo | null {
+  // Explicit override (any OS) — set MUSE_CHROME_PATH or PUPPETEER_EXECUTABLE_PATH.
+  const override = process.env.MUSE_CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '';
+  if (override && safeFileExists(override)) {
+    return { type: /edge/i.test(override) ? 'edge' : 'chrome', path: override };
+  }
+
+  // Linux/macOS: the upstream tool is Windows-only; add common POSIX paths so
+  // the puppeteer driver can run from source on Linux.
+  if (process.platform !== 'win32') {
+    const posixChrome = [
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ];
+    for (const p of posixChrome) {
+      if (safeFileExists(p)) return { type: 'chrome', path: p };
+    }
+    return null;
+  }
+
   const localAppData = process.env.LOCALAPPDATA || '';
   const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
   const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';

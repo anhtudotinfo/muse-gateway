@@ -15,4 +15,47 @@
 @import '../styles/connect.css';
 @import '../styles/endpoint-9r.css';
 
+/* ==========================================================================
+   Base layer — cross-cutting UI/UX hardening (a11y, overflow, semantics)
+   Added in refactor/ui-ux-optimize. Safe, global, framework-agnostic.
+   ========================================================================== */
+
+/* Predictable sizing everywhere */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Media never forces horizontal page scroll (fixes endpoint-card/table
+   overflow on narrow viewports) */
+img, video, canvas, svg { max-width: 100%; height: auto; }
+
+/* Flex/grid children can shrink below content width instead of overflowing */
+main, .app-main, [class*="content"] { min-width: 0; }
+
+/* Visible, consistent keyboard focus ring (was missing on icon buttons) */
+:focus-visible {
+  outline: 2px solid var(--apple-blue, #f43f5e);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* Don't show the ring on mouse click, only keyboard nav */
+:focus:not(:focus-visible) { outline: none; }
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Distinct DESTRUCTIVE semantic — previously --apple-red aliased the pink
+   brand accent, so "Delete all" looked identical to primary CTAs. */
+:root {
+  --muse-danger: #ef4444;
+  --muse-danger-hover: #dc2626;
+  --muse-danger-dim: rgba(239, 68, 68, 0.14);
+  --muse-danger-border: rgba(239, 68, 68, 0.4);
+}
+
 
